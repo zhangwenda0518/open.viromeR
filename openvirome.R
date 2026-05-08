@@ -414,13 +414,19 @@ if (p$api_mode && p$search_type == "GENUS") {
   cat("  Using web API (same database as openvirome.com)\n")
 
   # 1. Get counts grouped by scientific_name (all runs, no palmprint filter)
+  # Use filters approach instead of searchString to avoid 502 issues
   resp_counts <- httr::POST(
     paste0(API_BASE, "/counts"),
     httr::add_headers("Content-Type" = "application/json"),
     body = jsonlite::toJSON(list(
       table = "sra",
       groupBy = "label",
-      searchString = p$genus_match_term,
+      filters = list(list(
+        filterType = "label",
+        filterKey = "organism",
+        filterValue = p$genus_match_term,
+        groupByKey = "organism"
+      )),
       palmprintOnly = FALSE
     ), auto_unbox = TRUE),
     encode = "raw"
@@ -516,7 +522,12 @@ if (p$api_mode && p$search_type == "GENUS") {
     body = jsonlite::toJSON(list(
       table = "sra",
       groupBy = "label",
-      searchString = p$genus_match_term,
+      filters = list(list(
+        filterType = "label",
+        filterKey = "organism",
+        filterValue = p$genus_match_term,
+        groupByKey = "organism"
+      )),
       palmprintOnly = TRUE
     ), auto_unbox = TRUE),
     encode = "raw"
