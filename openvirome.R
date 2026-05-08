@@ -1268,7 +1268,8 @@ html_lines <- c(
           length(E(palm.g))),
   '</table>',
   '</div>',
-  '',
+  '')
+  # Close html_lines c() vector
 
   # ---- LLM-Powered Analysis Summary ----
   llm_summary <- ""
@@ -1443,13 +1444,14 @@ html_lines <- c(
               gsub("\n", "<br>", llm_network)),
       '</div>',
       '')
-  },
+  }
 
   # Table of Contents
-  '<div class="toc">',
-  '<h3>Contents</h3>',
-  '<ul>'
-)
+  html_lines <- c(html_lines,
+    '<div class="toc">',
+    '<h3>Contents</h3>',
+    '<ul>'
+  )
 
 # Add TOC entries
 for (sn in names(section_map)) {
