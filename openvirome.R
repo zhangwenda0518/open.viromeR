@@ -1520,6 +1520,78 @@ htmlwidgets::saveWidget(dt_summary,
   paste0(p$output.path, p$analysis_name, '_06_summary_table.html'),
   selfcontained = TRUE)
 
+# ---- SECTION 6b: SRA, Host, Ecology Tables (API mode only) -----------------
+sra_table_ok <- FALSE; host_table_ok <- FALSE; eco_table_ok <- FALSE
+
+if (isTRUE(api_skip_db)) {
+  cat("Fetching SRA metadata table...\n")
+  tryCatch({
+    resp_sra <- httr::POST(
+      paste0(API_BASE, "/results"),
+      httr::add_headers("Content-Type" = "application/json"),
+      body = jsonlite::toJSON(list(
+        ids = virus_runs_ids,
+        idColumn = "run_id",
+        table = "sra",
+        columns = "acc,assay_type,center_name,organism,bioproject,mbytes,mbases,librarylayout,instrument",
+        pageStart = 0, pageEnd = 100000
+      ), auto_unbox = TRUE), encode = "raw")
+    if (httr::status_code(resp_sra) == 200) {
+      sra_table <- jsonlite::fromJSON(httr::content(resp_sra, as = "text", encoding = "UTF-8"))
+      if (is.data.frame(sra_table) && nrow(sra_table) > 0) {
+        write.csv(sra_table, paste0(p$output.path, p$analysis_name, '_06_sra_table.csv'), row.names = FALSE)
+        cat(sprintf("  SRA table: %d runs\n", nrow(sra_table)))
+        sra_table_ok <- TRUE
+      }
+    }
+  }, error = function(e) cat("  SRA table fetch failed:", conditionMessage(e), "\n"))
+
+  cat("Fetching Host/Tissue metadata table...\n")
+  biosample_ids_all <- unique(na.omit(virome.df$bio_sample))
+  tryCatch({
+    resp_host <- httr::POST(
+      paste0(API_BASE, "/results"),
+      httr::add_headers("Content-Type" = "application/json"),
+      body = jsonlite::toJSON(list(
+        ids = biosample_ids_all,
+        idColumn = "biosample_id",
+        table = "biosample_tissue",
+        columns = "biosample_id,text,tissue,bto_id",
+        pageStart = 0, pageEnd = 100000
+      ), auto_unbox = TRUE), encode = "raw")
+    if (httr::status_code(resp_host) == 200) {
+      host_table <- jsonlite::fromJSON(httr::content(resp_host, as = "text", encoding = "UTF-8"))
+      if (is.data.frame(host_table) && nrow(host_table) > 0) {
+        write.csv(host_table, paste0(p$output.path, p$analysis_name, '_06_host_table.csv'), row.names = FALSE)
+        cat(sprintf("  Host table: %d biosamples\n", nrow(host_table)))
+        host_table_ok <- TRUE
+      }
+    }
+  }, error = function(e) cat("  Host table fetch failed:", conditionMessage(e), "\n"))
+
+  cat("Fetching Ecology/Geography table...\n")
+  tryCatch({
+    resp_eco <- httr::POST(
+      paste0(API_BASE, "/results"),
+      httr::add_headers("Content-Type" = "application/json"),
+      body = jsonlite::toJSON(list(
+        ids = biosample_ids_all[1:min(500, length(biosample_ids_all))],
+        idColumn = "accession",
+        table = "bgl_gm4326_gp4326",
+        columns = "accession,attribute_name,attribute_value,center_name,country,biome,elevation",
+        pageStart = 0, pageEnd = 100000
+      ), auto_unbox = TRUE), encode = "raw")
+    if (httr::status_code(resp_eco) == 200) {
+      eco_table <- jsonlite::fromJSON(httr::content(resp_eco, as = "text", encoding = "UTF-8"))
+      if (is.data.frame(eco_table) && nrow(eco_table) > 0) {
+        write.csv(eco_table, paste0(p$output.path, p$analysis_name, '_06_ecology_table.csv'), row.names = FALSE)
+        cat(sprintf("  Ecology table: %d records\n", nrow(eco_table)))
+        eco_table_ok <- TRUE
+      }
+    }
+  }, error = function(e) cat("  Ecology table fetch failed:", conditionMessage(e), "\n"))
+}
+
 # ---- Save Workspace --------------------------------------------------------
 cat("Saving workspace...\n")
 save(virome.df, virx.df, virome.df2, vir.g, palm.g, vrank.df,
@@ -1860,16 +1932,25 @@ for (sn in names(section_map)) {
 }
 
 # Add CSV download section
-html_lines <- c(html_lines,
-  '<div class="section">',
-  '<h2>Download Data</h2>',
-  '<ul>',
-  sprintf('  <li><a href="%s_virome_full.csv" download>virome_full.csv</a> — Full virome table</li>', p$analysis_name),
-  sprintf('  <li><a href="%s_virome_summary.csv" download>virome_summary.csv</a> — sOTU summary table</li>', p$analysis_name),
-  sprintf('  <li><a href="%s_%s.RData" download>%s_%s.RData</a> — R workspace (bioconductor)</li>',
-          p$analysis_name, p$report_id, p$analysis_name, p$report_id),
-  '</ul>',
-  '</div>',
+  html_lines <- c(html_lines,
+    '<div class="section">',
+    '<h2>Download Data</h2>',
+    '<ul>',
+    sprintf('  <li><a href="%s_virome_full.csv" download>virome_full.csv</a> — Full virome table</li>', p$analysis_name),
+    sprintf('  <li><a href="%s_virome_summary.csv" download>virome_summary.csv</a> — sOTU summary table</li>', p$analysis_name))
+
+  if (sra_table_ok) html_lines <- c(html_lines,
+    sprintf('  <li><a href="%s_06_sra_table.csv" download>sra_table.csv</a> — SRA metadata (assay, center, Gbp)</li>', p$analysis_name))
+  if (host_table_ok) html_lines <- c(html_lines,
+    sprintf('  <li><a href="%s_06_host_table.csv" download>host_table.csv</a> — Host tissue metadata</li>', p$analysis_name))
+  if (eco_table_ok) html_lines <- c(html_lines,
+    sprintf('  <li><a href="%s_06_ecology_table.csv" download>ecology_table.csv</a> — Geography/biome metadata</li>', p$analysis_name))
+
+  html_lines <- c(html_lines,
+    sprintf('  <li><a href="%s_%s.RData" download>%s_%s.RData</a> — R workspace (bioconductor)</li>',
+            p$analysis_name, p$report_id, p$analysis_name, p$report_id),
+    '</ul>',
+    '</div>',
   '',
   '<div style="text-align:center; color:#95a5a6; padding: 30px; font-size: 12px;">',
   sprintf('Generated by Open Virome v%s | %s</div>', p$ov.version, format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
