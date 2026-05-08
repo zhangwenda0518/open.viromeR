@@ -247,7 +247,7 @@ parse_args <- function() {
 # This makes the script self-contained — no manual `install.packages` needed.
 required_packages <- c(
   "dplyr", "ggplot2", "igraph", "plotly", "viridis", "DT",
-  "htmlwidgets", "gplots", "reshape2", "jsonlite", "httr"
+  "htmlwidgets", "gplots", "reshape2", "jsonlite", "httr", "base64enc"
 )
 for (pkg in required_packages) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
@@ -333,6 +333,23 @@ ds_chat <- function(system_prompt, user_message,
     cat(sprintf("  [LLM] Request failed: %s\n", conditionMessage(e)))
     return("")
   })
+}
+
+# ---- API Response Parser (with base64 fallback like web frontend) ---------
+parse_api_response <- function(resp, simplify = TRUE) {
+  txt <- httr::content(resp, as = "text", encoding = "UTF-8")
+  # Try direct JSON parse first
+  result <- tryCatch(jsonlite::fromJSON(txt, simplifyDataFrame = simplify), error = function(e) NULL)
+  if (!is.null(result)) return(result)
+  # Try base64 decode fallback (web frontend uses atob() fallback)
+  result <- tryCatch(jsonlite::fromJSON(rawToChar(base64enc::base64decode(txt)),
+                                         simplifyDataFrame = simplify), error = function(e) NULL)
+  if (!is.null(result)) return(result)
+  # Try just stripping whitespace/newlines and parsing (handles deflate garbage)
+  result <- tryCatch(jsonlite::fromJSON(gsub("[^[:print:]]", "", txt),
+                                         simplifyDataFrame = simplify), error = function(e) NULL)
+  if (!is.null(result)) return(result)
+  stop(sprintf("API returned non-JSON response: %.100s", txt))
 }
 
 # ---- Initialize Workspace --------------------------------------------------
@@ -425,7 +442,7 @@ if (p$api_mode && p$search_type == "GENUS") {
       palmprintOnly = FALSE
     ), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
   if (httr::status_code(resp_ids) != 200) stop("API /identifiers failed: ", httr::status_code(resp_ids))
-  api_ids <- jsonlite::fromJSON(httr::content(resp_ids, as = "text", encoding = "UTF-8"), simplifyDataFrame = FALSE)
+  api_ids <- parse_api_response(resp_ids, simplify = FALSE)
   all_run_ids <- unique(na.omit(unlist(api_ids$run$single)))
   all.runs <- all_run_ids
 
@@ -436,7 +453,7 @@ if (p$api_mode && p$search_type == "GENUS") {
       groupBy = "organism", palmprintOnly = FALSE), auto_unbox = TRUE),
     encode = "raw", httr::timeout(30))
   if (httr::status_code(resp_counts) != 200) stop("API /counts (all) failed: ", httr::status_code(resp_counts))
-  api_counts <- jsonlite::fromJSON(httr::content(resp_counts, as = "text", encoding = "UTF-8"))
+  api_counts <- parse_api_response(resp_counts)
 
   # Step 3: /identifiers (virus-positive only)
   resp_vir_ids <- httr::POST(paste0(API_BASE, "/identifiers"),
@@ -445,7 +462,7 @@ if (p$api_mode && p$search_type == "GENUS") {
       filterKey = "organism", filterValue = p$genus_match_term, groupByKey = "organism")),
       palmprintOnly = TRUE), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
   if (httr::status_code(resp_vir_ids) != 200) stop("API /identifiers (virus) failed: ", httr::status_code(resp_vir_ids))
-  api_vir_ids <- jsonlite::fromJSON(httr::content(resp_vir_ids, as = "text", encoding = "UTF-8"), simplifyDataFrame = FALSE)
+  api_vir_ids <- parse_api_response(resp_vir_ids, simplify = FALSE)
   vir_run_ids <- unique(na.omit(unlist(api_vir_ids$run$single)))
 
   # Step 4: /counts (virus-positive only)
@@ -455,7 +472,7 @@ if (p$api_mode && p$search_type == "GENUS") {
       groupBy = "organism", palmprintOnly = TRUE), auto_unbox = TRUE),
     encode = "raw", httr::timeout(30))
   api_vir_counts <- if (httr::status_code(resp_vir_counts) == 200) {
-    jsonlite::fromJSON(httr::content(resp_vir_counts, as = "text", encoding = "UTF-8"))
+    parse_api_response(resp_vir_counts)
   } else data.frame(name = character(), count = integer())
 
   # Step 5: /results (palm_virome data for virus runs)
@@ -465,7 +482,7 @@ if (p$api_mode && p$search_type == "GENUS") {
       table = "palm_virome", columns = "run,bioproject,biosample,organism,sotu,gb_acc,gb_pid,gb_eval,tax_species,tax_family",
       pageStart = 0, pageEnd = 100000), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
   if (httr::status_code(resp_results) != 200) stop("API /results failed: ", httr::status_code(resp_results))
-  api_results <- jsonlite::fromJSON(httr::content(resp_results, as = "text", encoding = "UTF-8"))
+  api_results <- parse_api_response(resp_results)
 
   # Build virome.df
   virome.df <- api_results
@@ -1067,7 +1084,7 @@ if (isTRUE(api_skip_db)) {
       encode = "raw"
     )
     if (httr::status_code(resp_geo) == 200) {
-      api_geo <- jsonlite::fromJSON(httr::content(resp_geo, as = "text", encoding = "UTF-8"))
+      api_geo <- parse_api_response(resp_geo)
       if (is.data.frame(api_geo) && nrow(api_geo) > 0) {
         # Extract lat/lon from attribute_value (format: "lat,lon" or PostGIS POINT)
         coords <- strsplit(as.character(api_geo$attribute_value), "[, ]+")
@@ -1465,7 +1482,7 @@ if (isTRUE(api_skip_db)) {
         pageStart = 0, pageEnd = 100000
       ), auto_unbox = TRUE), encode = "raw")
     if (httr::status_code(resp_sra) == 200) {
-      sra_table <- jsonlite::fromJSON(httr::content(resp_sra, as = "text", encoding = "UTF-8"))
+      sra_table <- parse_api_response(resp_sra)
       if (is.data.frame(sra_table) && nrow(sra_table) > 0) {
         write.csv(sra_table, paste0(p$output.path, p$analysis_name, '_06_sra_table.csv'), row.names = FALSE)
         cat(sprintf("  SRA table: %d runs\n", nrow(sra_table)))
@@ -1488,7 +1505,7 @@ if (isTRUE(api_skip_db)) {
         pageStart = 0, pageEnd = 100000
       ), auto_unbox = TRUE), encode = "raw")
     if (httr::status_code(resp_host) == 200) {
-      host_table <- jsonlite::fromJSON(httr::content(resp_host, as = "text", encoding = "UTF-8"))
+      host_table <- parse_api_response(resp_host)
       if (is.data.frame(host_table) && nrow(host_table) > 0) {
         write.csv(host_table, paste0(p$output.path, p$analysis_name, '_06_host_table.csv'), row.names = FALSE)
         cat(sprintf("  Host table: %d biosamples\n", nrow(host_table)))
@@ -1510,7 +1527,7 @@ if (isTRUE(api_skip_db)) {
         pageStart = 0, pageEnd = 100000
       ), auto_unbox = TRUE), encode = "raw")
     if (httr::status_code(resp_eco) == 200) {
-      eco_table <- jsonlite::fromJSON(httr::content(resp_eco, as = "text", encoding = "UTF-8"))
+      eco_table <- parse_api_response(resp_eco)
       if (is.data.frame(eco_table) && nrow(eco_table) > 0) {
         write.csv(eco_table, paste0(p$output.path, p$analysis_name, '_06_ecology_table.csv'), row.names = FALSE)
         cat(sprintf("  Ecology table: %d records\n", nrow(eco_table)))
