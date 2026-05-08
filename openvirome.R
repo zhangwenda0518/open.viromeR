@@ -767,45 +767,55 @@ write.csv(virx.df,   paste0(p$output.path, p$analysis_name, '_virome_summary.csv
 
 # ---- SECTION 1: Run Statistics ---------------------------------------------
 if (isTRUE(api_skip_db)) {
-  cat("Generating Run Statistics (API mode — limited)...\n")
+  cat("Generating Run Statistics (API mode)...\n")
 
-  # API mode: only basic stats without SRA metadata queries
-  # The species breakdown was already printed during data import.
-  # Export simplified plot: just run count summary
+  # Run count summary
   all_runs_n <- sum(api_counts$count)
   virus_runs_n <- length(unique(virome.runs))
+  cat(sprintf("  All SRA runs: %d  |  Virus-positive: %d (%.1f%%)\n",
+              all_runs_n, virus_runs_n,
+              if (all_runs_n > 0) 100 * virus_runs_n / all_runs_n else 0))
 
   run_summary <- data.frame(
     Category = c("All SRA Runs", "Virus-Positive Runs"),
-    Count    = c(all_runs_n, virus_runs_n)
-  )
+    Count    = c(all_runs_n, virus_runs_n))
   run_summary$Category <- factor(run_summary$Category,
                                  levels = c("All SRA Runs", "Virus-Positive Runs"))
   plot.run.summary <- ggplot(run_summary, aes(Category, Count, fill = Category)) +
-    geom_bar(stat = 'identity') +
-    theme_bw() + theme(legend.position = "none") +
+    geom_bar(stat = 'identity') + theme_bw() + theme(legend.position = "none") +
     scale_fill_manual(values = c('gray60', 'cornflowerblue')) +
     xlab("") + ylab("Number of SRA Runs") +
     ggtitle(sprintf("%s: SRA Run Overview (via web API)", p$analysis_name))
   png(paste0(p$output.path, p$analysis_name, '_01_run_summary.png'), width = 600, height = 500)
-  print(plot.run.summary)
-  invisible(dev.off())
+  print(plot.run.summary); invisible(dev.off())
 
-  # Scientific name bar plot from virome.df (no control split)
+  # Scientific name bar plot from API counts
+  api_counts_plot <- api_counts[order(api_counts$count), ]
+  api_counts_plot$name <- factor(api_counts_plot$name, levels = api_counts_plot$name)
+  plot.sci <- ggplot(api_counts_plot, aes(name, count)) +
+    geom_bar(stat = 'identity', fill = 'cornflowerblue') +
+    coord_flip() + theme_bw() +
+    xlab("Scientific Name") + ylab("All SRA Runs (count)") +
+    ggtitle("All SRA Runs by Species (not only palmprint)")
+  png(paste0(p$output.path, p$analysis_name, '_01_species_all.png'), width = 1000, height = 450)
+  print(plot.sci); invisible(dev.off())
+
+  # Virus-only bar plot from virome.df
   if ("scientific_name" %in% colnames(virome.df)) {
-    vorgx.df <- virome.df %>%
-      dplyr::count(scientific_name, sort = TRUE)
+    vorgx.df <- virome.df %>% dplyr::count(scientific_name, sort = TRUE)
     vorgx.df$scientific_name <- factor(vorgx.df$scientific_name,
       levels = rev(vorgx.df$scientific_name))
-    plot.sci <- ggplot(vorgx.df, aes(scientific_name, n)) +
-      geom_bar(stat = 'identity', fill = 'cornflowerblue') +
+    plot.sci2 <- ggplot(vorgx.df, aes(scientific_name, n)) +
+      geom_bar(stat = 'identity', fill = '#CB4154') +
       coord_flip() + theme_bw() +
-      xlab("Scientific Name") + ylab("Virus-positive SRA Runs (count)") +
-      ggtitle("Virus-Positive Runs by Species")
-    png(paste0(p$output.path, p$analysis_name, '_01_species_barplot.png'), width = 1000, height = 450)
-    print(plot.sci)
-    invisible(dev.off())
+      xlab("Scientific Name") + ylab("Virus-positive Runs (count)") +
+      ggtitle("Virus-Positive Runs by Species (only palmprint)")
+    png(paste0(p$output.path, p$analysis_name, '_01_species_virus.png'), width = 1000, height = 450)
+    print(plot.sci2); invisible(dev.off())
   }
+
+  # API mode: no SRA metadata or BioProject analysis (requires get.sraMeta)
+  cat("  Skipping SRA data-type and BioProject plots (requires DB)\n")
 
 } else {
   cat("Generating Run Statistics...\n")
@@ -1136,10 +1146,53 @@ tryCatch({
 } # End of if(!api_skip_db) for SECTION 4
 
 # ---- SECTION 5: Network Analysis -------------------------------------------
-if (isTRUE(api_skip_db)) {
-  cat("Skipping Network Analysis (not available in API mode)\n")
-} else {
 cat("Generating Network Analysis...\n")
+
+if (!isTRUE(api_skip_db)) {
+  # DB mode: full network with statistics from palm_virome_count
+  vir.g <- graph.virome2(virome.df)
+  palm.g_full <- graph.palm(virome.df$sotu, expanded.graph = FALSE)
+  palm_ctrl_ok <- TRUE
+} else {
+  # API mode: build bipartite network locally from virome.df
+  edgeList <- virome.df[, c("run", "sotu")]
+  vir.g <- graph_from_data_frame(edgeList, directed = FALSE)
+
+  # Node types: sOTU = TRUE, Run = FALSE
+  sotu_names <- unique(virome.df$sotu)
+  run_names <- unique(virome.df$run)
+  V(vir.g)$type <- FALSE
+  V(vir.g)$type[V(vir.g)$name %in% sotu_names] <- TRUE
+
+  # Paint sOTU nodes with metadata
+  sotu_meta <- virome.df[!duplicated(virome.df$sotu),
+                         c("sotu", "gb_pid", "gb_acc", "tax_species", "tax_family")]
+  sotu_match <- match(V(vir.g)$name, sotu_meta$sotu)
+  V(vir.g)$nickname <- "NA"
+  V(vir.g)$nickname[!is.na(sotu_match)] <- as.character(sotu_meta$sotu[sotu_match[!is.na(sotu_match)]])
+  V(vir.g)$tax_species <- "NA"
+  V(vir.g)$tax_species[!is.na(sotu_match)] <- as.character(sotu_meta$tax_species[sotu_match[!is.na(sotu_match)]])
+  V(vir.g)$tax_family <- "NA"
+  V(vir.g)$tax_family[!is.na(sotu_match)] <- as.character(sotu_meta$tax_family[sotu_match[!is.na(sotu_match)]])
+  V(vir.g)$gb_pid <- 0
+  V(vir.g)$gb_pid[!is.na(sotu_match)] <- as.numeric(sotu_meta$gb_pid[sotu_match[!is.na(sotu_match)]])
+  V(vir.g)$gb_pid[is.na(V(vir.g)$gb_pid)] <- 0
+
+  # Simplified stats (no DB-backed vrich calculation)
+  comps <- components(vir.g)
+  V(vir.g)$component <- as.character(factor(comps$membership,
+    levels = order(comps$csize, decreasing = TRUE)))
+  V(vir.g)$vrich <- 0
+  V(vir.g)$v.exact <- 0
+  V(vir.g)$v.or <- 0
+  V(vir.g)$pr <- degree(vir.g, normalized = TRUE)
+  V(vir.g)$vrank <- V(vir.g)$pr
+  V(vir.g)$lpa.label <- V(vir.g)$tax_family
+
+  palm.g_full <- NULL
+  palm_ctrl_ok <- FALSE
+  cat("  API mode: using simplified network stats (degree as vrank)\n")
+}
 
 library(igraph)
 vir.g <- graph.virome2(virome.df)
@@ -1280,62 +1333,67 @@ png(paste0(p$output.path, p$analysis_name, '_05_sotu_vrank.png'), width = 1000, 
 print(plot.vrank)
 invisible(dev.off())
 
-# 5d. Palmprint Network
-palm.g <- graph.palm(virome.df$sotu, expanded.graph = FALSE)
-vir2palm <- match(V(palm.g)$name, V(vir.g)$name)
-V(palm.g)$pr        <- V(vir.g)$pr[vir2palm]
-V(palm.g)$vrich     <- V(vir.g)$vrich[vir2palm]
-V(palm.g)$vrank     <- V(vir.g)$vrank[vir2palm]
-V(palm.g)$lpa.label <- V(vir.g)$lpa.label[vir2palm]
-rm(vir2palm)
+# 5d. Palmprint Network (API mode: skip palm_graph queries)
+if (!isTRUE(api_skip_db)) {
+  palm.g <- graph.palm(virome.df$sotu, expanded.graph = FALSE)
+  vir2palm <- match(V(palm.g)$name, V(vir.g)$name)
+  V(palm.g)$pr        <- V(vir.g)$pr[vir2palm]
+  V(palm.g)$vrich     <- V(vir.g)$vrich[vir2palm]
+  V(palm.g)$vrank     <- V(vir.g)$vrank[vir2palm]
+  V(palm.g)$lpa.label <- V(vir.g)$lpa.label[vir2palm]
+  rm(vir2palm)
 
-if (p$export.cytoscape) {
-  tryCatch({
-    RCy3::createNetworkFromIgraph(palm.g,
-      paste0("Palmnet - ", p$analysis_name, ":", p$report_id))
-    RCy3::setVisualStyle("ov002 palmnet")
-  }, error = function(e) {
-    cat("  Palmnet Cytoscape export failed:", conditionMessage(e), "\n")
-  })
+  if (p$export.cytoscape) {
+    tryCatch({
+      RCy3::createNetworkFromIgraph(palm.g,
+        paste0("Palmnet - ", p$analysis_name, ":", p$report_id))
+      RCy3::setVisualStyle("ov002 palmnet")
+    }, error = function(e) {
+      cat("  Palmnet Cytoscape export failed:", conditionMessage(e), "\n")
+    })
+  }
+
+  # 5e. Palmprint Degree Distribution
+  palm.degree.df <- data.frame(
+    set = "observed", setn = '0',
+    degree = as.numeric(degree(palm.g)))
+
+  n.controlsets <- 1
+  for (i in 1:n.controlsets) {
+    ctrl.g <- graph.palmControl(virome.df)
+    palm.degree <- rbind(palm.degree.df,
+      data.frame(set = "expected", setn = as.character(i),
+        degree = as.numeric(degree(ctrl.g))))
+  }
+
+  palm.degree.max <- aggregate(palm.degree, by = list(palm.degree$setn), max)
+  palm.degree.max <- palm.degree.max[, c('setn', 'degree')]
+  palm.degree.max <- palm.degree.max[order(palm.degree.max$degree, decreasing = TRUE), ]
+  palm.degree.max$rank <- 1:length(palm.degree.max$setn)
+  palm.degree$rank <- palm.degree.max$rank[match(palm.degree$setn, palm.degree.max$setn)]
+  observed.rank <- palm.degree$rank[palm.degree$set == 'observed'][1]
+
+  cat(sprintf("  Observed Palm Network: Nodes=%d, Edges=%d, Rank=%d/%d\n",
+    length(V(palm.g)), length(E(palm.g)), observed.rank, n.controlsets + 1))
+
+  rd.plot <- ggplot(palm.degree, aes(degree, alpha = set, fill = setn)) +
+    geom_histogram(binwidth = 1, position = 'identity', colour = NA) +
+    theme_bw() + xlab('sOTU node degree') +
+    theme(legend.position = "none") +
+    scale_alpha_manual(values = c(0.05, 0.5)) +
+    scale_fill_manual(values = c('orange2',
+      rep("black", length(unique(palm.degree$setn)) - 1))) +
+    facet_wrap(~set, ncol = 1)
+
+  png(paste0(p$output.path, p$analysis_name, '_05_palm_degree.png'), width = 800, height = 600)
+  print(rd.plot)
+  invisible(dev.off())
+
+  rm(ctrl.g, i, n.controlsets, observed.rank, rd.plot)
+} else {
+  cat("  Skipping Palmprint network (requires palm_graph DB table)\n")
+  palm.g <- make_empty_graph(directed = FALSE)
 }
-
-# 5e. Palmprint Degree Distribution
-palm.degree.df <- data.frame(
-  set = "observed", setn = '0',
-  degree = as.numeric(degree(palm.g)))
-
-n.controlsets <- 1
-for (i in 1:n.controlsets) {
-  ctrl.g <- graph.palmControl(virome.df)
-  palm.degree <- rbind(palm.degree.df,
-    data.frame(set = "expected", setn = as.character(i),
-      degree = as.numeric(degree(ctrl.g))))
-}
-
-palm.degree.max <- aggregate(palm.degree, by = list(palm.degree$setn), max)
-palm.degree.max <- palm.degree.max[, c('setn', 'degree')]
-palm.degree.max <- palm.degree.max[order(palm.degree.max$degree, decreasing = TRUE), ]
-palm.degree.max$rank <- 1:length(palm.degree.max$setn)
-palm.degree$rank <- palm.degree.max$rank[match(palm.degree$setn, palm.degree.max$setn)]
-observed.rank <- palm.degree$rank[palm.degree$set == 'observed'][1]
-
-cat(sprintf("  Observed Palm Network: Nodes=%d, Edges=%d, Rank=%d/%d\n",
-  length(V(palm.g)), length(E(palm.g)), observed.rank, n.controlsets + 1))
-
-rd.plot <- ggplot(palm.degree, aes(degree, alpha = set, fill = setn)) +
-  geom_histogram(binwidth = 1, position = 'identity', colour = NA) +
-  theme_bw() + xlab('sOTU node degree') +
-  theme(legend.position = "none") +
-  scale_alpha_manual(values = c(0.05, 0.5)) +
-  scale_fill_manual(values = c('orange2',
-    rep("black", length(unique(palm.degree$setn)) - 1))) +
-  facet_wrap(~set, ncol = 1)
-
-png(paste0(p$output.path, p$analysis_name, '_05_palm_degree.png'), width = 800, height = 600)
-print(rd.plot)
-invisible(dev.off())
-
-rm(ctrl.g, i, n.controlsets, observed.rank, rd.plot)
 } # End of if(!api_skip_db) for SECTION 5
 
 # ---- SECTION 6: Data Tables (HTML widgets saved as standalone) -------------
