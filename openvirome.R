@@ -1702,39 +1702,30 @@ html_lines <- c(
   # Close html_lines c() vector
 
   # ---- LLM-Powered Analysis Summary ----
-  llm_summary <- ""
+  llm_summary  <- ""
   llm_family   <- ""
-  llm_sotu     <- ""
   llm_network  <- ""
+  llm_sra      <- ""
+  llm_host     <- ""
+  llm_ecology  <- ""
 
   if (use_llm) {
     cat("Generating LLM analysis summaries...\n")
 
-    # Helper: build prompt for a structured virome overview
-    build_data_json <- function() {
-      # Top virus families
+    # ---- Helper: build JSON context for each data domain ----
+
+    build_virome_json <- function() {
       top_fam <- as.data.frame(sort(table(as.character(virome.df$tax_family)), decreasing = TRUE)[1:10])
       colnames(top_fam) <- c("family", "count")
-
-      # Top sOTUs by vrank
       top_sotu <- head(vrank.df, 15)
       top_sotu$sotu_label <- paste0(top_sotu$sotu, " (", top_sotu$nruns, " runs)")
-
-      # Component stats summary
       comp_summary <- cs.df[, c("component", "n_sotu", "n_run", "n_edge", "Vrich")]
-
-      # BioProject summary for LLM context (matches web-style bioproject references)
       bp_for_llm <- NULL
       if (exists("sra.df") && "bioproject" %in% colnames(sra.df)) {
         bp_counts <- sort(table(as.character(sra.df$bioproject)), decreasing = TRUE)
         bp_top <- head(bp_counts, 20)
-        bp_for_llm <- data.frame(
-          bioproject = names(bp_top),
-          n_runs = as.integer(bp_top),
-          row.names = NULL
-        )
+        bp_for_llm <- data.frame(bioproject = names(bp_top), n_runs = as.integer(bp_top), row.names = NULL)
       }
-
       jsonlite::toJSON(list(
         genus = p$genus_match_term,
         total_runs_all = length(unique(all.runs)),
@@ -1750,100 +1741,149 @@ html_lines <- c(
       ), auto_unbox = TRUE, pretty = TRUE)
     }
 
-    # 1. Virome summarization (web-style prompt architecture)
-    cat("  [LLM] Generating virome analysis summary...\n")
+    build_sra_json <- function() {
+      if (!exists("sra_table") || !is.data.frame(sra_table)) return("{}")
+      sra_json <- list(
+        total_runs = nrow(sra_table),
+        assay_types = as.list(sort(table(as.character(sra_table$assay_type)), decreasing = TRUE)[1:5]),
+        centers = as.list(sort(table(as.character(sra_table$center_name)), decreasing = TRUE)[1:5]),
+        total_gbp = round(sum(as.numeric(sra_table$mbases), na.rm = TRUE) / 1e9, 2),
+        instruments = as.list(sort(table(as.character(sra_table$instrument)), decreasing = TRUE)[1:5]),
+        bioprojects = as.list(sort(table(as.character(sra_table$bioproject)), decreasing = TRUE)[1:10])
+      )
+      jsonlite::toJSON(sra_json, auto_unbox = TRUE, pretty = TRUE)
+    }
+
+    build_host_json <- function() {
+      if (!exists("host_table") || !is.data.frame(host_table)) return("{}")
+      host_json <- list(
+        total_biosamples = nrow(host_table),
+        tissues = as.list(sort(table(as.character(host_table$tissue)), decreasing = TRUE)[1:10]),
+        bto_ids = as.list(sort(table(as.character(host_table$bto_id)), decreasing = TRUE)[1:5]),
+        sample_texts = head(as.character(host_table$text), 20)
+      )
+      jsonlite::toJSON(host_json, auto_unbox = TRUE, pretty = TRUE)
+    }
+
+    build_ecology_json <- function() {
+      if (!exists("eco_table") || !is.data.frame(eco_table)) return("{}")
+      eco_json <- list(
+        total_records = nrow(eco_table),
+        countries = as.list(sort(table(as.character(eco_table$country)), decreasing = TRUE)[1:10]),
+        biomes = as.list(sort(table(as.character(eco_table$biome)), decreasing = TRUE)[1:8]),
+        elevations = summary(as.numeric(eco_table$elevation)),
+        locations = head(unique(as.character(eco_table$attribute_value)), 10)
+      )
+      jsonlite::toJSON(eco_json, auto_unbox = TRUE, pretty = TRUE)
+    }
+
+    # ---- 1. Virome summary ----
+    cat("  [LLM] 1/5 Virome analysis overview...\n")
     llm_summary <- ds_chat(
       paste0(
-        "---Role---\n\n",
-        "You are a helpful bioinformatics research assistant being used to ",
-        "summarize virome data for a research paper.\n\n",
-        "---Goal---\n\n",
-        "Follow the instructions to summarize virome data:\n",
-        "1. Start with a concise, factual overview of the virome data based only ",
-        "on the provided bioprojects and dataset.\n",
-        "2. Progressively incorporate inferred insights by identifying patterns, ",
-        "trends, or broader implications of the virome data while staying within ",
-        "the given bioproject context.\n",
-        "3. For each overarching topic in the summarization, cite all relevant ",
-        "BioProject ID(s).\n",
-        "4. DO NOT reference any bioprojects that aren't given in the list.\n",
-        "5. ONLY use the information provided in the virome data and bioproject ",
-        "data to generate the summary.\n",
-        "6. Avoid using any external information or knowledge.\n",
-        "7. Focus on virome data and only use the provided bioproject context to ",
-        "guide the summarization and insights.\n\n",
-        "--- Inference Guidelines ---\n\n",
-        "Start by reporting observed data directly.\n",
-        "As the summary progresses, highlight trends, correlations, or significant ",
-        "findings that emerge.\n",
-        "End with a higher-level insight that connects findings to broader ",
-        "implications in virology, ecology, or host-pathogen interactions, while ",
-        "staying grounded in the provided data.\n\n",
-        "---Target response length and format---\n\n",
-        "One paragraph.\n",
-        "Use standard markdown delimiter ** to surround/highlight important topics ",
-        "or keywords in the virome data, DO NOT ADD THEM TO BIOPROJECT IDs.\n",
-        "DO NOT use any other delimiter in your summary, unless it is part of ",
-        "the virome data.\n",
-        "**Do not list more than 5 bioprojects in a single reference**. Instead, ",
-        "list the top 5 most relevant bioprojects and add \"+more\" to indicate ",
-        "that there are more."
-      ),
-      build_data_json())
-    cat(sprintf("  [LLM] Virome summary: %d chars\n", nchar(llm_summary)))
+        "---Role---\n\nYou are a bioinformatics research assistant summarizing ",
+        "virome data for a research paper.\n\n",
+        "---Goal---\n",
+        "1. Start with a factual overview of the virome data using only the provided data.\n",
+        "2. Progressively highlight patterns, trends, implications within the bioproject context.\n",
+        "3. Cite relevant BioProject IDs. DO NOT reference bioprojects not in the list.\n",
+        "4. Avoid external knowledge.\n\n",
+        "---Inference Guidelines---\n",
+        "Start with observed data → highlight trends → end with a higher-level insight ",
+        "connecting to virology, ecology, or host-pathogen interactions.\n\n",
+        "---Target---\nOne paragraph. Use ** for keywords. ",
+        "≤5 bioprojects per reference, add \"+more\"."
+      ), build_virome_json())
+    cat(sprintf("  [LLM] Virome: %d chars\n", nchar(llm_summary)))
 
-    # 2. Virus family interpretation (as virome data detail)
-    cat("  [LLM] Generating virus family interpretation...\n")
+    # ---- 2. Virus family interpretation ----
+    cat("  [LLM] 2/5 Virus family interpretation...\n")
     llm_family <- ds_chat(
       paste0(
-        "---Role---\n\n",
-        "You are a helpful bioinformatics research assistant being used to ",
-        "summarize virome data for a research paper.\n\n",
-        "---Goal---\n\n",
-        "Given the top virus families detected in a plant virome analysis, ",
-        "interpret the distribution and significance of the detected families:\n",
-        "1. For each top family, state whether it is expected in plant samples.\n",
-        "2. Note the genome type (ssRNA/dsRNA/ssDNA/dsDNA).\n",
-        "3. Explain potential relevance to plant health, agriculture, or ecology.\n",
-        "4. Cite any relevant BioProject IDs that support the interpretation.\n",
-        "5. ONLY use information from the provided data. Avoid external knowledge.\n\n",
-        "---Target response length and format---\n\n",
-        "One paragraph per virus family.\n",
-        "Use ** to highlight virus family names.\n",
-        "**Do not list more than 5 bioprojects in a single reference** — list ",
-        "the top 5 most relevant and add \"+more\".\n",
-        "DO NOT use any other delimiter in your summary."
-      ),
-      build_data_json())
-    cat(sprintf("  [LLM] Family interpretation: %d chars\n", nchar(llm_family)))
+        "---Role---\n\nYou are a plant virologist interpreting virus family ",
+        "distributions from a plant virome analysis.\n\n",
+        "---Goal---\n",
+        "1. For each top family: is it expected in plants? genome type? relevance?\n",
+        "2. Cite BioProject IDs supporting the interpretation.\n",
+        "3. ONLY use provided data.\n\n",
+        "---Target---\nOne paragraph per family. Use ** for family names. ",
+        "≤5 bioprojects per reference, add \"+more\"."
+      ), build_virome_json())
+    cat(sprintf("  [LLM] Family: %d chars\n", nchar(llm_family)))
 
-    # 3. Network analysis interpretation (as virome data detail)
-    cat("  [LLM] Generating network analysis interpretation...\n")
+    # ---- 3. Network interpretation ----
+    cat("  [LLM] 3/5 Network analysis interpretation...\n")
     llm_network <- ds_chat(
       paste0(
-        "---Role---\n\n",
-        "You are a helpful bioinformatics research assistant being used to ",
-        "summarize virome network data for a research paper.\n\n",
-        "---Goal---\n\n",
-        "Interpret the bipartite Run-sOTU network and palmprint-palmprint network ",
-        "from a plant virome analysis:\n",
-        "1. Explain what the component structure reveals about virus-host ",
-        "associations and community organization.\n",
-        "2. Describe what high vrank sOTUs mean biologically — these are sOTUs ",
-        "with high virome enrichment, statistical significance, and network centrality.\n",
-        "3. Note whether the palmprint network degree distribution suggests ",
-        "clustering of phylogenetically related virus sequences.\n",
-        "4. Cite any relevant BioProject IDs that support the interpretation.\n",
-        "5. ONLY use the information provided. Avoid external knowledge.\n\n",
-        "---Target response length and format---\n\n",
-        "One to two paragraphs.\n",
-        "Use ** to highlight key metrics or sOTU identifiers.\n",
-        "**Do not list more than 5 bioprojects in a single reference** — list ",
-        "the top 5 most relevant and add \"+more\".\n",
-        "DO NOT use any other delimiter in your summary."
-      ),
-      build_data_json())
-    cat(sprintf("  [LLM] Network interpretation: %d chars\n", nchar(llm_network)))
+        "---Role---\n\nYou are a bioinformatics specialist interpreting viral ",
+        "network analysis results.\n\n",
+        "---Goal---\n",
+        "1. Explain what component structure reveals about virus-host associations.\n",
+        "2. What high vrank sOTUs mean (high enrichment + significance + centrality).\n",
+        "3. Does palmprint network suggest phylogenetic clustering?\n",
+        "4. Cite BioProject IDs. ONLY use provided data.\n\n",
+        "---Target---\n1-2 paragraphs. Use ** for key metrics. ",
+        "≤5 bioprojects per reference, add \"+more\"."
+      ), build_virome_json())
+    cat(sprintf("  [LLM] Network: %d chars\n", nchar(llm_network)))
+
+    # ---- 4. SRA metadata summary ----
+    if (sra_table_ok) {
+      cat("  [LLM] 4/5 SRA metadata summary...\n")
+      llm_sra <- ds_chat(
+        paste0(
+          "---Role---\n\nYou are a bioinformatics research assistant summarizing ",
+          "SRA (Sequence Read Archive) metadata for a research paper.\n\n",
+          "---Goal---\n",
+          "1. Describe the sequencing landscape: dominant assay types, instruments, ",
+          "centers, and total sequencing depth (Gbp).\n",
+          "2. Mention which BioProjects provided the most data.\n",
+          "3. Note whether the data is transcriptomic (RNA-Seq) or other types.\n",
+          "4. ONLY use provided data. Avoid external knowledge.\n\n",
+          "---Target---\nOne paragraph. Use ** for key names. ",
+          "≤5 bioprojects per reference, add \"+more\"."
+        ), build_sra_json())
+      cat(sprintf("  [LLM] SRA: %d chars\n", nchar(llm_sra)))
+    }
+
+    # ---- 5. Host/Tissue summary ----
+    if (host_table_ok) {
+      cat("  [LLM] 5/5 Host/Tissue metadata summary...\n")
+      llm_host <- ds_chat(
+        paste0(
+          "---Role---\n\nYou are a bioinformatics research assistant summarizing ",
+          "host/tissue metadata for a plant virome study.\n\n",
+          "---Goal---\n",
+          "1. Describe the tissue/organ distribution: which tissues were sampled ",
+          "most (leaf, fruit, root, flower)?\n",
+          "2. Note any developmental stages or stress conditions mentioned.\n",
+          "3. Explain what host tissue diversity implies for the virome analysis.\n",
+          "4. ONLY use provided data.\n\n",
+          "---Target---\nOne paragraph. Use ** for tissue names. ",
+          "Do NOT fabricate any sample information not in the data."
+        ), build_host_json())
+      cat(sprintf("  [LLM] Host: %d chars\n", nchar(llm_host)))
+    }
+
+    # ---- 6. Ecology/Geography summary ----
+    if (eco_table_ok) {
+      cat("  [LLM] 6/5 Ecology/Geography summary...\n")
+      llm_ecology <- ds_chat(
+        paste0(
+          "---Role---\n\nYou are a bioinformatics research assistant summarizing ",
+          "ecological and geographical data for a research paper.\n\n",
+          "---Goal---\n",
+          "1. Describe the geographical distribution: which countries/regions ",
+          "dominate the sampling?\n",
+          "2. Note the biome types (e.g. desert, temperate forest) and elevation range.\n",
+          "3. Discuss any ecological patterns or implications for the virome.\n",
+          "4. Avoid mentioning lat/lon coordinates directly; use location names.\n",
+          "5. ONLY use provided data.\n\n",
+          "---Target---\nOne paragraph. Use ** for locations and biomes. ",
+          "≤5 bioprojects per reference, add \"+more\"."
+        ), build_ecology_json())
+      cat(sprintf("  [LLM] Ecology: %d chars\n", nchar(llm_ecology)))
+    }
   }
 
   if (nchar(llm_summary) > 0) {
@@ -1869,9 +1909,39 @@ html_lines <- c(
   if (nchar(llm_network) > 0) {
     html_lines <- c(html_lines,
       '<div class="section" style="border-left: 4px solid #e67e22;">',
-      '<h2>Network Analysis Interpretation</h2>',
+      '<h2>AI: Network Analysis</h2>',
       sprintf('<div style="line-height: 1.8; color: #2c3e50;">%s</div>',
               gsub("\n", "<br>", llm_network)),
+      '</div>',
+      '')
+  }
+
+  if (nchar(llm_sra) > 0) {
+    html_lines <- c(html_lines,
+      '<div class="section" style="border-left: 4px solid #9b59b6;">',
+      '<h2>AI: SRA Metadata Summary</h2>',
+      sprintf('<div style="line-height: 1.8; color: #2c3e50;">%s</div>',
+              gsub("\n", "<br>", llm_sra)),
+      '</div>',
+      '')
+  }
+
+  if (nchar(llm_host) > 0) {
+    html_lines <- c(html_lines,
+      '<div class="section" style="border-left: 4px solid #e74c3c;">',
+      '<h2>AI: Host/Tissue Metadata Summary</h2>',
+      sprintf('<div style="line-height: 1.8; color: #2c3e50;">%s</div>',
+              gsub("\n", "<br>", llm_host)),
+      '</div>',
+      '')
+  }
+
+  if (nchar(llm_ecology) > 0) {
+    html_lines <- c(html_lines,
+      '<div class="section" style="border-left: 4px solid #1abc9c;">',
+      '<h2>AI: Ecology/Geography Summary</h2>',
+      sprintf('<div style="line-height: 1.8; color: #2c3e50;">%s</div>',
+              gsub("\n", "<br>", llm_ecology)),
       '</div>',
       '')
   }
