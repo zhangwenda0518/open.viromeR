@@ -406,9 +406,15 @@ if (p$search_type == "SEARCH") {
   all.runs <- virome.runs
 
 } else if (p$search_type == "GENUS") {
-  # Get ALL runs under this genus (may include runs without virus hits)
-  # get.taxRunlist returns a character vector, not a data.frame
-  all.runs     <- get.taxRunlist(genus = p$genus_match_term)
+  # Get ALL runs whose scientific_name starts with the genus
+  # Uses srarun table directly (same as web version), not sra_tax
+  # This returns ALL matching runs, including those without virus hits
+  genus_pattern <- paste0(p$genus_match_term, " %")  # e.g. "Lycium %"
+  all_runs_sra <- tbl(con, "srarun") %>%
+    dplyr::filter(scientific_name %like% paste0(p$genus_match_term, "%")) %>%
+    select(run) %>%
+    as.data.frame()
+  all.runs     <- unique(all_runs_sra$run)
   # Get only runs with palmprint (virus) hits
   virome.df    <- get.palmVirome(run.vec = all.runs)
   virome.runs  <- virome.df$run
