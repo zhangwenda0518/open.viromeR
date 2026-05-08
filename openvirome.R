@@ -1114,36 +1114,94 @@ print(virus.hist.gbid)
 invisible(dev.off())
 
 # ---- SECTION 4: Geographical Distribution ----------------------------------
-if (isTRUE(api_skip_db)) {
-  cat("Skipping Geographical Map (not available in API mode)\n")
-} else {
 cat("Generating Geographical Map...\n")
 
-tryCatch({
-  pp.geo <- get.sraGeo(virome.runs, con = con)
-  pp.geo <- geoFilter(pp.geo, wobble = FALSE)
-
-  if (nrow(pp.geo) > 0) {
-    world <- ggplot2::map_data("world")
-    plot.geo.lycium <- ggplot() +
-      geom_map(data = world, map = world,
-        aes(long, lat, map_id = region),
-        color = "gray80", fill = "gray95", linewidth = 0.1) +
-      geom_point(data = pp.geo, aes(x = lng, y = lat),
-        color = "red", alpha = 0.6, size = 2) +
-      theme_bw() +
-      coord_cartesian(xlim = c(70, 140), ylim = c(15, 55)) +
-      ggtitle("Geographical Distribution of Lycium SRA Runs (East Asia Focus)") +
-      xlab("Longitude") + ylab("Latitude")
-
-    png(paste0(p$output.path, p$analysis_name, '_04_geo_map.png'), width = 1000, height = 600)
-    print(plot.geo.lycium)
-    invisible(dev.off())
+if (isTRUE(api_skip_db)) {
+  # API mode: fetch geo data via /results from bgl_gm4326_gp4326 table
+  # using biosample IDs from the virus-positive results
+  biosample_ids <- unique(na.omit(virome.df$bio_sample))
+  if (length(biosample_ids) > 500) {
+    biosample_ids <- biosample_ids[1:500]  # limit to avoid huge request
   }
-}, error = function(e) {
-  cat("  Skipping Geo Mapping:", conditionMessage(e), "\n")
-})
-} # End of if(!api_skip_db) for SECTION 4
+
+  tryCatch({
+    resp_geo <- httr::POST(
+      paste0(API_BASE, "/results"),
+      httr::add_headers("Content-Type" = "application/json"),
+      body = jsonlite::toJSON(list(
+        table = "bgl_gm4326_gp4326",
+        columns = "accession,attribute_value",
+        ids = biosample_ids,
+        idColumn = "accession",
+        pageStart = 0,
+        pageEnd = 50000
+      ), auto_unbox = TRUE),
+      encode = "raw"
+    )
+    if (httr::status_code(resp_geo) == 200) {
+      api_geo <- jsonlite::fromJSON(httr::content(resp_geo, as = "text", encoding = "UTF-8"))
+      if (is.data.frame(api_geo) && nrow(api_geo) > 0) {
+        # Extract lat/lon from attribute_value (format: "lat,lon" or PostGIS POINT)
+        coords <- strsplit(as.character(api_geo$attribute_value), "[, ]+")
+        lats <- sapply(coords, function(x) as.numeric(x[1]))
+        lngs <- sapply(coords, function(x) as.numeric(x[2]))
+        geo_df <- data.frame(lat = lats, lng = lngs, stringsAsFactors = FALSE)
+        geo_df <- geo_df[!is.na(geo_df$lat) & !is.na(geo_df$lng), ]
+        geo_df <- geo_df[geo_df$lat > -90 & geo_df$lat < 90 & geo_df$lng > -180 & geo_df$lng < 180, ]
+
+        if (nrow(geo_df) > 0) {
+          world <- tryCatch(ggplot2::map_data("world"),
+                           error = function(e) NULL)
+          if (!is.null(world)) {
+            plot.geo.lycium <- ggplot() +
+              geom_map(data = world, map = world,
+                aes(long, lat, map_id = region),
+                color = "gray80", fill = "gray95", linewidth = 0.1) +
+              geom_point(data = geo_df, aes(x = lng, y = lat),
+                color = "red", alpha = 0.6, size = 2) +
+              theme_bw() +
+              coord_cartesian(xlim = c(70, 140), ylim = c(15, 55)) +
+              ggtitle("Geographical Distribution (via web API)") +
+              xlab("Longitude") + ylab("Latitude")
+            png(paste0(p$output.path, p$analysis_name, '_04_geo_map.png'), width = 1000, height = 600)
+            print(plot.geo.lycium)
+            invisible(dev.off())
+            cat(sprintf("  Mapped %d geo points\n", nrow(geo_df)))
+          }
+        }
+      }
+    }
+  }, error = function(e) {
+    cat("  Skipping Geo Mapping (API):", conditionMessage(e), "\n")
+  })
+
+} else {
+  # DB mode: use get.sraGeo
+  tryCatch({
+    pp.geo <- get.sraGeo(virome.runs, con = con)
+    pp.geo <- geoFilter(pp.geo, wobble = FALSE)
+
+    if (nrow(pp.geo) > 0) {
+      world <- ggplot2::map_data("world")
+      plot.geo.lycium <- ggplot() +
+        geom_map(data = world, map = world,
+          aes(long, lat, map_id = region),
+          color = "gray80", fill = "gray95", linewidth = 0.1) +
+        geom_point(data = pp.geo, aes(x = lng, y = lat),
+          color = "red", alpha = 0.6, size = 2) +
+        theme_bw() +
+        coord_cartesian(xlim = c(70, 140), ylim = c(15, 55)) +
+        ggtitle("Geographical Distribution of Lycium SRA Runs (East Asia Focus)") +
+        xlab("Longitude") + ylab("Latitude")
+
+      png(paste0(p$output.path, p$analysis_name, '_04_geo_map.png'), width = 1000, height = 600)
+      print(plot.geo.lycium)
+      invisible(dev.off())
+    }
+  }, error = function(e) {
+    cat("  Skipping Geo Mapping:", conditionMessage(e), "\n")
+  })
+}
 
 # ---- SECTION 5: Network Analysis -------------------------------------------
 cat("Generating Network Analysis...\n")
