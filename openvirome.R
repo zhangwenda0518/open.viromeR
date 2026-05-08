@@ -433,15 +433,18 @@ cat(sprintf("  Total SRA runs matching query:    %d\n", length(all.runs)))
 cat(sprintf("  Runs with palmprint (virus) hits: %d\n", length(virome.runs)))
 
 # ---- Post-hoc Scientific Name Filtering ----------------------------------
-# Even with GENUS mode, the sra_tax table may contain misclassified records.
-# SEARCH mode with LIKE can match genus names appearing in species epithets
-# (e.g. "Aethionema lycium", "Gymnocalycium" + "Lycium").
-# These filters remove such false positives AFTER retrieval.
+# GENUS mode uses exact tax_genus match — no false positives expected.
+# SEARCH mode with SQL LIKE can match genus names appearing in species
+# epithets (e.g. "Aethionema lycium"). genus_filter catches these.
+# Automatically sets genus_filter = genus_match_term for SEARCH mode.
+if (p$search_type == "SEARCH" && p$genus_filter == '') {
+  p$genus_filter <- p$genus_match_term
+}
 
 n_before <- nrow(virome.df)
 
 # Filter: keep only rows where scientific_name starts with genus_filter
-if (p$genus_filter != '') {
+if (p$genus_filter != '' && p$search_type != "GENUS") {
   keep_idx <- grepl(paste0('^', p$genus_filter), as.character(virome.df$scientific_name),
                     ignore.case = TRUE)
   if (sum(!keep_idx) > 0) {
