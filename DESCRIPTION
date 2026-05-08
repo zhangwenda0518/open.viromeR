@@ -3,8 +3,8 @@ Title: Open Virome R-interface
 Description: Holding Earth's viruses in your palm
 Version: 0.0.6
 Authors@R: c( 
-  person("Artem", "Babaian", , "artem@rRNA.ca", role = c("aut", "cre"),
-    comment = c(ORCID = "0000-0002-4315-6262"))
+  person("Artem", "Babaian", "artem@rRNA.ca", email = "artem@rRNA.ca", role = c("aut", "cre"),
+    comment = c(ORCID = "0000-0002-4315-6262")))
 URL: https://www.openvirome.com
 BugReports: https://github.com/serratus-bio/open-virome/issues
 License: AGPL-3
