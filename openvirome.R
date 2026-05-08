@@ -581,11 +581,14 @@ if (!is.null(all_orgn) && nrow(all_orgn) > 0) {
                                as.character(sp_summary$scientific_name.y))
 
   sp_counts <- table(sp_summary$species, sp_summary$has_virus)
+  # Safe column extraction — some columns may be missing if all/none are virus+
+  vpos_col <- if ("TRUE" %in% colnames(sp_counts)) as.integer(sp_counts[, "TRUE"]) else rep(0, nrow(sp_counts))
+  vneg_col <- if ("FALSE" %in% colnames(sp_counts)) as.integer(sp_counts[, "FALSE"]) else rep(0, nrow(sp_counts))
   sp_df <- data.frame(
     species = rownames(sp_counts),
     total_runs = as.integer(rowSums(sp_counts)),
-    virus_positive = as.integer(sp_counts[, "TRUE"]),
-    virus_negative = as.integer(sp_counts[, "FALSE"]),
+    virus_positive = vpos_col,
+    virus_negative = vneg_col,
     row.names = NULL
   )
   sp_df <- sp_df[order(sp_df$total_runs, decreasing = TRUE), ]
