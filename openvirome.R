@@ -534,9 +534,14 @@ if (p$api_mode && p$search_type == "GENUS") {
     select(run, scientific_name) %>%
     as.data.frame()
   all.runs <- unique(all_runs_sra$run)
-  # Save for Species-Level Summary
   all_runs_sra <- all_runs_sra[!duplicated(all_runs_sra$run), ]
   rownames(all_runs_sra) <- NULL
+
+  # Build api_counts & api_vir_counts for unified SECTION code path
+  sp_all <- table(as.character(all_runs_sra$scientific_name))
+  sp_vir <- table(as.character(virome.df$scientific_name))
+  api_counts <- data.frame(name = names(sp_all), count = as.integer(sp_all), stringsAsFactors = FALSE)
+  api_vir_counts <- data.frame(name = names(sp_vir), count = as.integer(sp_vir), stringsAsFactors = FALSE)
 
 } else if (p$search_type == "LIST") {
   if (is.null(p$input.list)) stop("LIST mode requires --input_path")
@@ -560,52 +565,23 @@ cat(sprintf("  Total SRA runs matching query:    %d\n", length(all.runs)))
 cat(sprintf("  Runs with palmprint (virus) hits: %d\n", length(unique(virome.df$run))))
 
 # ---- Species-Level Summary -------------------------------------------------
-# Fetch scientific_name for all matched runs — prefer in-memory if available
-all_orgn <- if (exists("all_runs_sra") && !is.null(all_runs_sra) &&
-                ncol(all_runs_sra) >= 2) {
-  data.frame(run = all_runs_sra$run, scientific_name = all_runs_sra$scientific_name,
-             stringsAsFactors = FALSE)
-} else {
-  tryCatch({
-    orgn_vec <- get.sraOrgn(all.runs, con = con, ordinal = TRUE)
-    data.frame(run = all.runs, scientific_name = orgn_vec, stringsAsFactors = FALSE)
-  }, error = function(e) NULL)
+# Use api_counts/api_vir_counts if available, otherwise build from data
+if (!exists("api_counts") || is.null(api_counts)) {
+  sp_all <- table(as.character(virome.df$scientific_name))
+  api_counts <- data.frame(name = names(sp_all), count = as.integer(sp_all), stringsAsFactors = FALSE)
+  api_vir_counts <- api_counts  # all runs are virus-positive in this case
 }
-if (!is.null(all_orgn) && nrow(all_orgn) > 0) {
-  # Virus-positive runs from virome.df
-  virus_df <- unique(virome.df[, c("run", "scientific_name")])
-  virus_df$has_virus <- TRUE
 
-  # Merge: all runs vs virus-positive
-  sp_summary <- merge(all_orgn, virus_df, by = "run", all.x = TRUE)
-  sp_summary$has_virus[is.na(sp_summary$has_virus)] <- FALSE
-  sp_summary$species <- ifelse(is.na(sp_summary$scientific_name.y) | sp_summary$scientific_name.y == "",
-                               as.character(sp_summary$scientific_name.x),
-                               as.character(sp_summary$scientific_name.y))
-
-  sp_counts <- table(sp_summary$species, sp_summary$has_virus)
-  # Safe column extraction — some columns may be missing if all/none are virus+
-  vpos_col <- if ("TRUE" %in% colnames(sp_counts)) as.integer(sp_counts[, "TRUE"]) else rep(0, nrow(sp_counts))
-  vneg_col <- if ("FALSE" %in% colnames(sp_counts)) as.integer(sp_counts[, "FALSE"]) else rep(0, nrow(sp_counts))
-  sp_df <- data.frame(
-    species = rownames(sp_counts),
-    total_runs = as.integer(rowSums(sp_counts)),
-    virus_positive = vpos_col,
-    virus_negative = vneg_col,
-    row.names = NULL
-  )
-  sp_df <- sp_df[order(sp_df$total_runs, decreasing = TRUE), ]
-
-  cat("\n  Species breakdown:\n")
-  cat(sprintf("  %-45s %6s %6s %6s\n", "Species", "Total", "Virus+", "Virus-"))
-  cat(sprintf("  %-45s %6s %6s %6s\n", "-------", "-----", "------", "------"))
-  for (i in seq_len(nrow(sp_df))) {
-    cat(sprintf("  %-45s %6d %6d %6d\n",
-                sp_df$species[i], sp_df$total_runs[i],
-                sp_df$virus_positive[i], sp_df$virus_negative[i]))
-  }
-  cat("\n")
+cat("\n  Species breakdown:\n")
+cat(sprintf("  %-45s %6s %6s %6s\n", "Species", "Total", "Virus+", "Virus-"))
+cat(sprintf("  %-45s %6s %6s %6s\n", "-------", "-----", "------", "------"))
+for (i in seq_len(nrow(api_counts))) {
+  sp <- api_counts$name[i]; n_all <- api_counts$count[i]
+  virus_idx <- match(sp, api_vir_counts$name)
+  n_vir <- if (!is.na(virus_idx)) api_vir_counts$count[virus_idx] else 0
+  cat(sprintf("  %-45s %6d %6d %6d\n", sp, n_all, n_vir, n_all - n_vir))
 }
+cat("\n")
 
 cat(sprintf("  After filtering: %d rows retained\n", nrow(virome.df)))
 
@@ -718,11 +694,13 @@ if (p$doControl) {
 virome.df2$scientific_name <- makeTop10(virome.df2$scientific_name)
 virome.df2$tax_family      <- makeTop10(virome.df2$tax_family)
 
-# Clean up control intermediates (keep virome.runs for geo-plot)
-rm(run_ids)
-if (exists("negVirome.df")) rm(negVirome.df)
-if (exists("neg.virome.runs")) rm(neg.virome.runs)
-if (exists("negv.df")) rm(negv.df)
+# Clean up control intermediates
+suppressWarnings({
+  if (exists("run_ids")) rm(run_ids)
+  if (exists("negVirome.df")) rm(negVirome.df)
+  if (exists("neg.virome.runs")) rm(neg.virome.runs)
+  if (exists("negv.df")) rm(negv.df)
+})
 
 # ---- Export CSV Data -------------------------------------------------------
 cat("Exporting CSV data...\n")
