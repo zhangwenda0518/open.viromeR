@@ -178,20 +178,22 @@ parse_args <- function() {
     deepseek_api_key  = ""    # DeepSeek API key for LLM summaries (or env var DEEPSEEK_API_KEY)
   )
 
-  # Parse --key value pairs
-  if (length(args) > 0) {
-    i <- 1
-    while (i <= length(args)) {
-      arg <- args[i]
+  # Parse --key value pairs (index-based, no <<- which is unreliable inside functions)
+  n <- length(args)
+  if (n > 0) {
+    idx <- 1
+    while (idx <= n) {
+      arg <- args[idx]
       if (grepl("^--", arg)) {
         key <- sub("^--", "", arg)
-        val <- if (i + 1 <= length(args) && !grepl("^--", args[i + 1])) {
-          i <<- i + 1
-          args[i]
+        # If next arg exists and doesn't start with '--', it's the value
+        if (idx + 1 <= n && !grepl("^--", args[idx + 1])) {
+          val <- args[idx + 1]
+          idx <- idx + 1  # consume value
         } else {
-          ""
+          val <- ""
         }
-        # Map CLI flag to list name (handle snake_case and camelCase)
+        # Map CLI flag to list name
         mapped_key <- switch(key,
           ov_version         = "ov.version",
           analysis_name      = "analysis_name",
@@ -221,20 +223,13 @@ parse_args <- function() {
         }
         p[[mapped_key]] <- val
       }
-      i <- i + 1
+      idx <- idx + 1
     }
   }
 
   # Special: if control_type is "NONE", set to empty string
   if (toupper(p$control_type) == "NONE") {
     p$control_type <- ""
-  }
-
-  # Diagnostic: print raw parsed args before returning
-  message("DEBUG parse_args:")
-  message("  args received: ", paste(commandArgs(TRUE), collapse = " | "))
-  for (nm in names(p)) {
-    message(sprintf("  p$%s = %s", nm, as.character(p[[nm]])[1]))
   }
 
   return(p)
