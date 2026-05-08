@@ -436,8 +436,11 @@ cat(sprintf("  Runs with palmprint (virus) hits: %d\n", length(unique(virome.df$
 
 # ---- Species-Level Summary -------------------------------------------------
 # Fetch scientific_name for all matched runs (not just virus-positive ones)
-all_orgn <- tryCatch(get.sraOrgn(all.runs, con = con, ordinal = TRUE, as.df = TRUE),
-                     error = function(e) NULL)
+# get.sraOrgn with ordinal=TRUE returns a character vector, not a data.frame
+all_orgn <- tryCatch({
+  orgn_vec <- get.sraOrgn(all.runs, con = con, ordinal = TRUE)
+  data.frame(run = all.runs, scientific_name = orgn_vec, stringsAsFactors = FALSE)
+}, error = function(e) NULL)
 if (!is.null(all_orgn) && nrow(all_orgn) > 0) {
   # Virus-positive runs from virome.df
   virus_df <- unique(virome.df[, c("run", "scientific_name")])
