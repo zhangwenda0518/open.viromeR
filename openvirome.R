@@ -432,7 +432,46 @@ if (p$search_type == "SEARCH") {
 virome.runs <- virome.df$run
 
 cat(sprintf("  Total SRA runs matching query:    %d\n", length(all.runs)))
-cat(sprintf("  Runs with palmprint (virus) hits: %d\n", length(virome.runs)))
+cat(sprintf("  Runs with palmprint (virus) hits: %d\n", length(unique(virome.df$run))))
+
+# ---- Species-Level Summary -------------------------------------------------
+# Fetch scientific_name for all matched runs (not just virus-positive ones)
+all_orgn <- tryCatch(get.sraOrgn(all.runs, con = con, ordinal = TRUE, as.df = TRUE),
+                     error = function(e) NULL)
+if (!is.null(all_orgn) && nrow(all_orgn) > 0) {
+  # Virus-positive runs from virome.df
+  virus_df <- unique(virome.df[, c("run", "scientific_name")])
+  virus_df$has_virus <- TRUE
+
+  # Merge: all runs vs virus-positive
+  sp_summary <- merge(all_orgn, virus_df, by = "run", all.x = TRUE)
+  sp_summary$has_virus[is.na(sp_summary$has_virus)] <- FALSE
+  sp_summary$species <- ifelse(is.na(sp_summary$scientific_name.y) | sp_summary$scientific_name.y == "",
+                               as.character(sp_summary$scientific_name.x),
+                               as.character(sp_summary$scientific_name.y))
+
+  sp_counts <- table(sp_summary$species, sp_summary$has_virus)
+  sp_df <- data.frame(
+    species = rownames(sp_counts),
+    total_runs = as.integer(rowSums(sp_counts)),
+    virus_positive = as.integer(sp_counts[, "TRUE"]),
+    virus_negative = as.integer(sp_counts[, "FALSE"]),
+    row.names = NULL
+  )
+  sp_df <- sp_df[order(sp_df$total_runs, decreasing = TRUE), ]
+
+  cat("\n  Species breakdown:\n")
+  cat(sprintf("  %-45s %6s %6s %6s\n", "Species", "Total", "Virus+", "Virus-"))
+  cat(sprintf("  %-45s %6s %6s %6s\n", "-------", "-----", "------", "------"))
+  for (i in seq_len(nrow(sp_df))) {
+    cat(sprintf("  %-45s %6d %6d %6d\n",
+                sp_df$species[i], sp_df$total_runs[i],
+                sp_df$virus_positive[i], sp_df$virus_negative[i]))
+  }
+  cat("\n")
+}
+
+cat(sprintf("  After filtering: %d rows retained\n", nrow(virome.df)))
 
 # ---- Post-hoc Scientific Name Filtering ----------------------------------
 # GENUS mode uses exact tax_genus match — no false positives expected.
