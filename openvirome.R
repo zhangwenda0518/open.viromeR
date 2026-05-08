@@ -45,7 +45,7 @@
 #   --genus_filter {prefix} Keep only scientific_name starting with this prefix
 #                         (removes false matches like "Gymnocalycium") ['']
 #   --species_filter {re} Further restrict to regex match on scientific_name ['']
-#   --palmprint_only {T|F} Only virus-positive runs in downstream analysis [TRUE]
+#   --palmprint_only {T|F} Only virus-positive runs in downstream analysis [FALSE]
 #   --export_cytoscape {T|F} Export networks to Cytoscape [FALSE]
 #   --deepseek_api_key {key} DeepSeek API key for LLM-powered summaries ['']
 #                            When set, generates natural-language analysis summaries
@@ -105,7 +105,7 @@ PARAMETERS (all optional, defaults in [brackets])
   --genus_filter {prefix} Keep only scientific_name starting with this prefix
                         (removes false matches like \"Gymnocalycium\") ['']
   --species_filter {re} Further restrict to regex match on scientific_name ['']
-  --palmprint_only {T|F} Only virus-positive runs in downstream analysis [TRUE]
+  --palmprint_only {T|F} Only virus-positive runs in downstream analysis [FALSE]
   --export_cytoscape {T|F} Export networks to Cytoscape [FALSE]
   --deepseek_api_key {key} DeepSeek API key for LLM summaries ['']
                            Also configurable via env var DEEPSEEK_API_KEY.
@@ -174,7 +174,7 @@ parse_args <- function() {
     export.cytoscape  = FALSE,
     genus_filter      = "",   # e.g. "Lycium" — keep only rows starting with this genus
     species_filter    = "",   # e.g. "Lycium barbarum" — further restrict to this species
-    palmprint_only    = TRUE, # only include virus-positive SRA runs in downstream analysis
+    palmprint_only    = FALSE, # only include virus-positive SRA runs in downstream analysis
     deepseek_api_key  = ""    # DeepSeek API key for LLM summaries (or env var DEEPSEEK_API_KEY)
   )
 
