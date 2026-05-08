@@ -554,7 +554,7 @@ if (p$api_mode && p$search_type == "GENUS") {
   api_skip_db <- TRUE
 
 } else if (p$search_type == "SEARCH") {
-  api_skip_db <- FALSE
+  api_skip_db <- TRUE   # local-only analysis, fast
   virome.df <- get.palmVirome(org.search = p$virome_search_term)
   if (p$virome_deplete_term != '') {
     deplete.runs <- grep(p$virome_deplete_term, virome.df$scientific_name, ignore.case = TRUE)
@@ -567,31 +567,17 @@ if (p$api_mode && p$search_type == "GENUS") {
   all.runs <- virome.runs
 
 } else if (p$search_type == "GENUS") {
-  api_skip_db <- FALSE
-  # Get ALL runs from palm_virome matching genus prefix (same as web search)
-  # get.palmVirome with org.search does LIKE 'Lycium%' on scientific_name
+  api_skip_db <- TRUE   # local-only analysis, fast
+  # Fast path: single DB query, all analysis local (same speed as web)
   virome.df    <- get.palmVirome(org.search = paste0(p$genus_match_term, "%"))
   virome.runs  <- unique(virome.df$run)
-
-  # Also get all runs from srarun for "all runs" count (including non-virus)
-  # Note: srarun may have fewer runs than the full SRA database.
-  # If it looks incomplete, fall back to palm_virome runs + virus_df species.
-  all_runs_sra <- tbl(con, "srarun") %>%
-    dplyr::filter(scientific_name %like% paste0(p$genus_match_term, "%")) %>%
-    select(run, scientific_name) %>%
-    as.data.frame()
-  all.runs     <- unique(all_runs_sra$run)
-
-  # If srarun returned suspiciously few runs (less than virus runs * 1.5),
-  # fall back to virome.df runs as "all runs" for downstream stats
-  if (length(all.runs) < length(unique(virome.runs)) * 1.5) {
-    warning("srarun table appears incomplete. Using palm_virome runs for all-runs stats.")
-    all.runs <- unique(virome.runs)
+  all.runs     <- virome.runs  # use virus runs as all-runs (fast, srarun is incomplete anyway)
+  # Species breakdown from virome.df directly
+  sp_breakdown <- sort(table(as.character(virome.df$scientific_name)), decreasing = TRUE)
+  cat("\n  Species breakdown (virus-positive runs):\n")
+  for (i in seq_along(sp_breakdown)) {
+    cat(sprintf("    %-40s %5d\n", names(sp_breakdown)[i], sp_breakdown[i]))
   }
-
-  # Save scientific_name lookup for species breakdown
-  all_runs_sra <- all_runs_sra[!duplicated(all_runs_sra$run), ]
-  rownames(all_runs_sra) <- NULL
 
 } else if (p$search_type == "LIST") {
   if (is.null(p$input.list)) stop("LIST mode requires --input_path")
