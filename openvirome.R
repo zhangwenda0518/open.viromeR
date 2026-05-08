@@ -252,10 +252,12 @@ p <- parse_args()
 # Install open.viromeR from local directory if needed
 if (!requireNamespace("open.viromeR", quietly = TRUE)) {
   cat("Installing open.viromeR from local source...\n")
-  script_dir <- dirname(normalizePath(sys.frame(1)$ofile %||% sub("^--file=", "",
-    grep("^--file=", commandArgs(), value = TRUE))))
-  if (script_dir == "" || is.na(script_dir)) {
-    script_dir <- getwd()
+  # Detect script directory (works under both Rscript and source())
+  script_dir <- getwd()
+  file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+  if (length(file_arg) > 0) {
+    script_path <- normalizePath(sub("^--file=", "", file_arg[1]))
+    script_dir <- dirname(script_path)
   }
   if (!file.exists(file.path(script_dir, "DESCRIPTION"))) {
     stop(sprintf(
@@ -316,7 +318,8 @@ ds_chat <- function(system_prompt, user_message,
     if (!is.null(parsed$choices$message$content)) {
       return(parsed$choices$message$content[[1]])
     }
-    cat(sprintf("  [LLM] API error: %s\n", parsed$error$message %||% "unknown"))
+    cat(sprintf("  [LLM] API error: %s\n",
+                if (is.null(parsed$error$message)) "unknown" else parsed$error$message))
     return("")
   }, error = function(e) {
     cat(sprintf("  [LLM] Request failed: %s\n", conditionMessage(e)))
