@@ -405,8 +405,8 @@ if (p$search_type == "SEARCH") {
 
 } else if (p$search_type == "GENUS") {
   # Get ALL runs under this genus (may include runs without virus hits)
-  all_runs.df  <- get.taxRunlist(genus = p$genus_match_term)
-  all.runs     <- all_runs.df$run
+  # get.taxRunlist returns a character vector, not a data.frame
+  all.runs     <- get.taxRunlist(genus = p$genus_match_term)
   # Get only runs with palmprint (virus) hits
   virome.df    <- get.palmVirome(run.vec = all.runs)
   virome.runs  <- virome.df$run
