@@ -406,18 +406,21 @@ if (p$search_type == "SEARCH") {
   all.runs <- virome.runs
 
 } else if (p$search_type == "GENUS") {
-  # Get ALL runs whose scientific_name starts with the genus
-  # Uses srarun table directly (same as web version), not sra_tax
-  # This returns ALL matching runs, including those without virus hits
-  genus_pattern <- paste0(p$genus_match_term, " %")  # e.g. "Lycium %"
+  # Get ALL runs from palm_virome matching genus prefix (same as web search)
+  # get.palmVirome with org.search does LIKE 'Lycium%' on scientific_name
+  virome.df    <- get.palmVirome(org.search = paste0(p$genus_match_term, "%"))
+  virome.runs  <- unique(virome.df$run)
+
+  # Also get all runs from srarun for "all runs" count (including non-virus)
   all_runs_sra <- tbl(con, "srarun") %>%
     dplyr::filter(scientific_name %like% paste0(p$genus_match_term, "%")) %>%
-    select(run) %>%
+    select(run, scientific_name) %>%
     as.data.frame()
   all.runs     <- unique(all_runs_sra$run)
-  # Get only runs with palmprint (virus) hits
-  virome.df    <- get.palmVirome(run.vec = all.runs)
-  virome.runs  <- virome.df$run
+
+  # Save scientific_name lookup for species breakdown
+  all_runs_sra <- all_runs_sra[!duplicated(all_runs_sra$run), ]
+  rownames(all_runs_sra) <- NULL
 
 } else if (p$search_type == "LIST") {
   if (is.null(p$input.list)) stop("LIST mode requires --input_path")
@@ -441,12 +444,17 @@ cat(sprintf("  Total SRA runs matching query:    %d\n", length(all.runs)))
 cat(sprintf("  Runs with palmprint (virus) hits: %d\n", length(unique(virome.df$run))))
 
 # ---- Species-Level Summary -------------------------------------------------
-# Fetch scientific_name for all matched runs (not just virus-positive ones)
-# get.sraOrgn with ordinal=TRUE returns a character vector, not a data.frame
-all_orgn <- tryCatch({
-  orgn_vec <- get.sraOrgn(all.runs, con = con, ordinal = TRUE)
-  data.frame(run = all.runs, scientific_name = orgn_vec, stringsAsFactors = FALSE)
-}, error = function(e) NULL)
+# Fetch scientific_name for all matched runs — prefer in-memory if available
+all_orgn <- if (exists("all_runs_sra") && !is.null(all_runs_sra) &&
+                ncol(all_runs_sra) >= 2) {
+  data.frame(run = all_runs_sra$run, scientific_name = all_runs_sra$scientific_name,
+             stringsAsFactors = FALSE)
+} else {
+  tryCatch({
+    orgn_vec <- get.sraOrgn(all.runs, con = con, ordinal = TRUE)
+    data.frame(run = all.runs, scientific_name = orgn_vec, stringsAsFactors = FALSE)
+  }, error = function(e) NULL)
+}
 if (!is.null(all_orgn) && nrow(all_orgn) > 0) {
   # Virus-positive runs from virome.df
   virus_df <- unique(virome.df[, c("run", "scientific_name")])
