@@ -52,6 +52,12 @@
 #                            and embeds them in the HTML report. Uses model
 #                            deepseek-v4-pro via HTTPS API. No extra R packages needed.
 #                            Set env var DEEPSEEK_API_KEY as alternative.
+#   --api_mode {T|F}    Use the Open Virome web API instead of direct PostgreSQL [FALSE]
+#                       When TRUE, fetches count/identifier data from the public
+#                       API endpoint (https://zrdbegawce.execute-api.us-east-1.amazonaws.com/prod).
+#                       This uses the same database as the web frontend.
+#                       Requires internet access and the `httr` package (auto-installed).
+#                       NOT compatible with SEARCH/LIST/STAT modes — GENUS only.
 ###############################################################################
 
 # ---- Print Help & Exit -----------------------------------------------------
@@ -175,7 +181,8 @@ parse_args <- function() {
     genus_filter      = "",   # e.g. "Lycium" — keep only rows starting with this genus
     species_filter    = "",   # e.g. "Lycium barbarum" — further restrict to this species
     palmprint_only    = FALSE, # only include virus-positive SRA runs in downstream analysis
-    deepseek_api_key  = ""    # DeepSeek API key for LLM summaries (or env var DEEPSEEK_API_KEY)
+    deepseek_api_key  = "",    # DeepSeek API key for LLM summaries (or env var DEEPSEEK_API_KEY)
+    api_mode          = FALSE  # use Open Virome web API instead of direct PostgreSQL
   )
 
   # Parse --key value pairs (index-based, no <<- which is unreliable inside functions)
@@ -204,6 +211,7 @@ parse_args <- function() {
           species_filter     = "species_filter",
           palmprint_only     = "palmprint_only",
           deepseek_api_key   = "deepseek_api_key",
+          api_mode           = "api_mode",
           virome_search_term = "virome_search_term",
           virome_deplete_term = "virome_deplete_term",
           input_path         = "input.path",
@@ -251,27 +259,27 @@ for (pkg in required_packages) {
 # ---- Load Package ----------------------------------------------------------
 p <- parse_args()
 
-# Install open.viromeR from local directory if needed
-if (!requireNamespace("open.viromeR", quietly = TRUE)) {
-  cat("Installing open.viromeR from local source...\n")
-  # Detect script directory (works under both Rscript and source())
-  script_dir <- getwd()
-  file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
-  if (length(file_arg) > 0) {
-    script_path <- normalizePath(sub("^--file=", "", file_arg[1]))
-    script_dir <- dirname(script_path)
+# In API mode, we don't need the PostgreSQL driver or open.viromeR package
+if (!p$api_mode) {
+  # Install open.viromeR from local directory if needed
+  if (!requireNamespace("open.viromeR", quietly = TRUE)) {
+    cat("Installing open.viromeR from local source...\n")
+    # Detect script directory (works under both Rscript and source())
+    script_dir <- getwd()
+    file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+    if (length(file_arg) > 0) {
+      script_path <- normalizePath(sub("^--file=", "", file_arg[1]))
+      script_dir <- dirname(script_path)
+    }
+    if (!file.exists(file.path(script_dir, "DESCRIPTION"))) {
+      stop(sprintf(
+        "Cannot find open.viromeR source in '%s'. Please run from the open.viromeR directory.",
+        script_dir))
+    }
+    install.packages(script_dir, repos = NULL, type = "source", quiet = TRUE)
   }
-  if (!file.exists(file.path(script_dir, "DESCRIPTION"))) {
-    stop(sprintf(
-      "Cannot find open.viromeR source in '%s'. Please run from the open.viromeR directory.",
-      script_dir))
-  }
-  install.packages(script_dir, repos = NULL, type = "source", quiet = TRUE)
+  library('open.viromeR', quietly = TRUE)
 }
-
-library('open.viromeR', quietly = TRUE)
-defaultW <- getOption("warn")
-options(warn = -1)
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -281,8 +289,6 @@ suppressPackageStartupMessages({
   library(viridis)
   library(DT)
 })
-
-rm(defaultW)
 
 # ---- DeepSeek LLM Client (no extra packages needed, uses base R) -----------
 # Resolve API key: CLI argument takes priority, then environment variable
@@ -335,8 +341,10 @@ if (!dir.exists(p$output.path)) {
   dir.create(p$output.path, recursive = TRUE)
 }
 
-# Establish Serratus server connection
-con <- SerratusConnect()
+# Establish Serratus server connection (skipped in API mode)
+if (!p$api_mode) {
+  con <- SerratusConnect()
+}
 
 # Input files
 if (is.null(p$input.path) || p$input.path == '') {
@@ -356,9 +364,14 @@ p$report_id     <- format(Sys.time(), "%Y%m%d_%H%M%S")
 p$output.html   <- paste0(p$output.path, p$analysis_name, '_', p$report_id, '.html')
 p$output.rdata  <- paste0(p$output.path, p$analysis_name, '_', p$report_id, '.RData')
 
-# Control set toggle
-p$doControl <- (p$control_type != '')
-
+# Control set toggle (disabled in API mode — API doesn't support control sets)
+if (p$api_mode) {
+  p$doControl <- FALSE
+  cat("  Note: API mode active — control sets disabled, palmprint_only forced TRUE\n")
+  p$palmprint_only <- TRUE
+} else {
+  p$doControl <- (p$control_type != '')
+}
 # UI colors
 p$ui.setcol <- c('gray50', 'cornflowerblue')
 
@@ -392,8 +405,145 @@ cat("Querying virome data...\n")
 # all.runs = all SRA runs matching the search (GENUS/LIST/SEARCH/STAT)
 # virome.runs = subset of all.runs that have palmprint (virus) hits
 all.runs <- NULL
+api_skip_db <- FALSE
 
-if (p$search_type == "SEARCH") {
+if (p$api_mode && p$search_type == "GENUS") {
+  # ---- API MODE: use Open Virome public web API ----
+  API_BASE <- "https://zrdbegawce.execute-api.us-east-1.amazonaws.com/prod"
+
+  cat("  Using web API (same database as openvirome.com)\n")
+
+  # 1. Get counts grouped by scientific_name (all runs, no palmprint filter)
+  resp_counts <- httr::POST(
+    paste0(API_BASE, "/counts"),
+    httr::add_headers("Content-Type" = "application/json"),
+    body = jsonlite::toJSON(list(
+      table = "sra",
+      groupBy = "label",
+      searchString = p$genus_match_term,
+      palmprintOnly = FALSE
+    ), auto_unbox = TRUE),
+    encode = "raw"
+  )
+
+  if (httr::status_code(resp_counts) != 200) {
+    stop("API /counts request failed: ", httr::status_code(resp_counts))
+  }
+  api_counts <- jsonlite::fromJSON(httr::content(resp_counts, as = "text", encoding = "UTF-8"))
+
+  # 2. Get identifiers (run_ids) for this search, no palmprint filter
+  resp_ids <- httr::POST(
+    paste0(API_BASE, "/identifiers"),
+    httr::add_headers("Content-Type" = "application/json"),
+    body = jsonlite::toJSON(list(
+      filters = list(list(
+        filterType = "label",
+        filterKey = "organism",
+        filterValue = p$genus_match_term,
+        groupByKey = "organism"
+      )),
+      palmprintOnly = FALSE
+    ), auto_unbox = TRUE),
+    encode = "raw"
+  )
+  if (httr::status_code(resp_ids) != 200) {
+    stop("API /identifiers request failed: ", httr::status_code(resp_ids))
+  }
+  api_ids <- jsonlite::fromJSON(httr::content(resp_ids, as = "text", encoding = "UTF-8"))
+
+  # Extract all runs from API response
+  all_runs_ids <- unique(api_ids$run_id)
+  all.runs <- all_runs_ids[!is.na(all_runs_ids)]
+
+  # 3. Get virus-positive identifiers
+  resp_vir_ids <- httr::POST(
+    paste0(API_BASE, "/identifiers"),
+    httr::add_headers("Content-Type" = "application/json"),
+    body = jsonlite::toJSON(list(
+      filters = list(list(
+        filterType = "label",
+        filterKey = "organism",
+        filterValue = p$genus_match_term,
+        groupByKey = "organism"
+      )),
+      palmprintOnly = TRUE
+    ), auto_unbox = TRUE),
+    encode = "raw"
+  )
+  api_vir_ids <- jsonlite::fromJSON(httr::content(resp_vir_ids, as = "text", encoding = "UTF-8"))
+  virus_runs_ids <- unique(api_vir_ids$run_id)
+
+  # 4. Get results for virus-positive runs from palm_virome table
+  resp_results <- httr::POST(
+    paste0(API_BASE, "/results"),
+    httr::add_headers("Content-Type" = "application/json"),
+    body = jsonlite::toJSON(list(
+      ids = virus_runs_ids,
+      idColumn = "run_id",
+      table = "palm_virome",
+      columns = "run,bioproject,biosample,organism,sotu,gb_acc,gb_pid,gb_eval,tax_species,tax_family",
+      pageStart = 0,
+      pageEnd = 100000
+    ), auto_unbox = TRUE),
+    encode = "raw"
+  )
+  if (httr::status_code(resp_results) != 200) {
+    stop("API /results request failed: ", httr::status_code(resp_results))
+  }
+  api_results <- jsonlite::fromJSON(httr::content(resp_results, as = "text", encoding = "UTF-8"))
+
+  # Map API column names to virome.df expected format
+  virome.df <- api_results
+  colnames(virome.df)[colnames(virome.df) == "run"] <- "run"
+  colnames(virome.df)[colnames(virome.df) == "organism"] <- "scientific_name"
+  colnames(virome.df)[colnames(virome.df) == "bioproject"] <- "bio_project"
+  colnames(virome.df)[colnames(virome.df) == "biosample"] <- "bio_sample"
+
+  # Fill missing expected columns with NA
+  for (col_needed in c("palm_id", "nickname", "node", "node_coverage",
+                        "node_pid", "node_eval", "node_qc", "node_seq")) {
+    if (!(col_needed %in% colnames(virome.df))) {
+      virome.df[[col_needed]] <- NA
+    }
+  }
+  virome.df$node_qc <- as.logical(virome.df$node_qc)
+  virome.runs <- virus_runs_ids
+
+  # Virus-only counts for species breakdown
+  resp_vir_counts <- httr::POST(
+    paste0(API_BASE, "/counts"),
+    httr::add_headers("Content-Type" = "application/json"),
+    body = jsonlite::toJSON(list(
+      table = "sra",
+      groupBy = "label",
+      searchString = p$genus_match_term,
+      palmprintOnly = TRUE
+    ), auto_unbox = TRUE),
+    encode = "raw"
+  )
+  api_vir_counts <- if (httr::status_code(resp_vir_counts) == 200) {
+    jsonlite::fromJSON(httr::content(resp_vir_counts, as = "text", encoding = "UTF-8"))
+  } else data.frame(name = character(), count = integer())
+
+  # Species breakdown: match all-runs counts with virus counts
+  cat("\n  Species breakdown:\n")
+  cat(sprintf("  %-45s %6s %6s %6s\n", "Species", "Total", "Virus+", "Virus-"))
+  for (i in seq_len(nrow(api_counts))) {
+    sp <- api_counts$name[i]
+    n_all <- api_counts$count[i]
+    virus_idx <- match(sp, api_vir_counts$name)
+    n_vir <- if (!is.na(virus_idx)) api_vir_counts$count[virus_idx] else 0
+    n_novir <- n_all - n_vir
+    cat(sprintf("  %-45s %6d %6d %6d\n", sp, n_all, n_vir, n_novir))
+  }
+  cat(sprintf("\n  Total SRA runs (all):     %d\n", sum(api_counts$count)))
+  cat(sprintf("  Runs with palmprint hits: %d\n", length(virome.runs)))
+  cat(sprintf("  After filtering: %d rows retained\n", nrow(virome.df)))
+  # API mode: skip DB-dependent downstream functions
+  api_skip_db <- TRUE
+
+} else if (p$search_type == "SEARCH") {
+  api_skip_db <- FALSE
   virome.df <- get.palmVirome(org.search = p$virome_search_term)
   if (p$virome_deplete_term != '') {
     deplete.runs <- grep(p$virome_deplete_term, virome.df$scientific_name, ignore.case = TRUE)
@@ -406,6 +556,7 @@ if (p$search_type == "SEARCH") {
   all.runs <- virome.runs
 
 } else if (p$search_type == "GENUS") {
+  api_skip_db <- FALSE
   # Get ALL runs from palm_virome matching genus prefix (same as web search)
   # get.palmVirome with org.search does LIKE 'Lycium%' on scientific_name
   virome.df    <- get.palmVirome(org.search = paste0(p$genus_match_term, "%"))
@@ -567,26 +718,28 @@ cat(sprintf("  Virus-positive runs: %d, unique sOTUs: %d\n",
             length(unique(virome.runs)), nrow(virx.df)))
 
 # ---- Control Virome --------------------------------------------------------
-if (p$control_type == "LIST") {
-  negVirome.df <- get.negativeVirome(run.vec = virome.runs)
+if (!isTRUE(api_skip_db) && p$doControl) {
+  if (p$control_type == "LIST") {
+    negVirome.df <- get.negativeVirome(run.vec = virome.runs)
 
-} else if (p$control_type == "SEARCH") {
-  negVirome.df <- get.negativeVirome(org.search = p$virome_search_term)
+  } else if (p$control_type == "SEARCH") {
+    negVirome.df <- get.negativeVirome(org.search = p$virome_search_term)
 
-} else if (p$control_type == "BIOPROJECT") {
-  neg.virome.runs <- get.sraProj(run_ids = virome.df$run,
-                                 exclude.input.runs = TRUE,
-                                 con = con)
-  if (length(neg.virome.runs$run_id) == 0) {
-    negVirome.df <- NA
-    p$doControl <- FALSE
-  } else {
-    negVirome.df <- get.negativeVirome(run.vec = neg.virome.runs$run_id)
-    negv.df      <- melt.virome(negVirome.df)
+  } else if (p$control_type == "BIOPROJECT") {
+    neg.virome.runs <- get.sraProj(run_ids = virome.df$run,
+                                   exclude.input.runs = TRUE,
+                                   con = con)
+    if (length(neg.virome.runs$run_id) == 0) {
+      negVirome.df <- NA
+      p$doControl <- FALSE
+    } else {
+      negVirome.df <- get.negativeVirome(run.vec = neg.virome.runs$run_id)
+      negv.df      <- melt.virome(negVirome.df)
+    }
+
+  } else if (p$control_type != '') {
+    stop('Unknown control_type. Use: NONE, LIST, SEARCH, or BIOPROJECT')
   }
-
-} else if (p$control_type != '') {
-  stop('Unknown control_type. Use: NONE, LIST, SEARCH, or BIOPROJECT')
 }
 
 cat(sprintf("  Control set: %s\n", if (p$doControl) "active" else "none"))
@@ -613,7 +766,49 @@ write.csv(virome.df, paste0(p$output.path, p$analysis_name, '_virome_full.csv'),
 write.csv(virx.df,   paste0(p$output.path, p$analysis_name, '_virome_summary.csv'), row.names = FALSE)
 
 # ---- SECTION 1: Run Statistics ---------------------------------------------
-cat("Generating Run Statistics...\n")
+if (isTRUE(api_skip_db)) {
+  cat("Generating Run Statistics (API mode — limited)...\n")
+
+  # API mode: only basic stats without SRA metadata queries
+  # The species breakdown was already printed during data import.
+  # Export simplified plot: just run count summary
+  all_runs_n <- sum(api_counts$count)
+  virus_runs_n <- length(unique(virome.runs))
+
+  run_summary <- data.frame(
+    Category = c("All SRA Runs", "Virus-Positive Runs"),
+    Count    = c(all_runs_n, virus_runs_n)
+  )
+  run_summary$Category <- factor(run_summary$Category,
+                                 levels = c("All SRA Runs", "Virus-Positive Runs"))
+  plot.run.summary <- ggplot(run_summary, aes(Category, Count, fill = Category)) +
+    geom_bar(stat = 'identity') +
+    theme_bw() + theme(legend.position = "none") +
+    scale_fill_manual(values = c('gray60', 'cornflowerblue')) +
+    xlab("") + ylab("Number of SRA Runs") +
+    ggtitle(sprintf("%s: SRA Run Overview (via web API)", p$analysis_name))
+  png(paste0(p$output.path, p$analysis_name, '_01_run_summary.png'), width = 600, height = 500)
+  print(plot.run.summary)
+  invisible(dev.off())
+
+  # Scientific name bar plot from virome.df (no control split)
+  if ("scientific_name" %in% colnames(virome.df)) {
+    vorgx.df <- virome.df %>%
+      dplyr::count(scientific_name, sort = TRUE)
+    vorgx.df$scientific_name <- factor(vorgx.df$scientific_name,
+      levels = rev(vorgx.df$scientific_name))
+    plot.sci <- ggplot(vorgx.df, aes(scientific_name, n)) +
+      geom_bar(stat = 'identity', fill = 'cornflowerblue') +
+      coord_flip() + theme_bw() +
+      xlab("Scientific Name") + ylab("Virus-positive SRA Runs (count)") +
+      ggtitle("Virus-Positive Runs by Species")
+    png(paste0(p$output.path, p$analysis_name, '_01_species_barplot.png'), width = 1000, height = 450)
+    print(plot.sci)
+    invisible(dev.off())
+  }
+
+} else {
+  cat("Generating Run Statistics...\n")
 
 # 1a. SRA Run Count Summary — outputs TWO sets:
 #     (A) All runs matching query
@@ -762,6 +957,8 @@ print(bp.size)
 print(bp.hist)
 invisible(dev.off())
 
+} # End of else block for non-API-mode SECTION 1
+
 # ---- SECTION 2: Virus Family Summary ---------------------------------------
 cat("Generating Virus Family Summary...\n")
 
@@ -907,6 +1104,9 @@ print(virus.hist.gbid)
 invisible(dev.off())
 
 # ---- SECTION 4: Geographical Distribution ----------------------------------
+if (isTRUE(api_skip_db)) {
+  cat("Skipping Geographical Map (not available in API mode)\n")
+} else {
 cat("Generating Geographical Map...\n")
 
 tryCatch({
@@ -933,8 +1133,12 @@ tryCatch({
 }, error = function(e) {
   cat("  Skipping Geo Mapping:", conditionMessage(e), "\n")
 })
+} # End of if(!api_skip_db) for SECTION 4
 
 # ---- SECTION 5: Network Analysis -------------------------------------------
+if (isTRUE(api_skip_db)) {
+  cat("Skipping Network Analysis (not available in API mode)\n")
+} else {
 cat("Generating Network Analysis...\n")
 
 library(igraph)
@@ -1132,15 +1336,27 @@ print(rd.plot)
 invisible(dev.off())
 
 rm(ctrl.g, i, n.controlsets, observed.rank, rd.plot)
+} # End of if(!api_skip_db) for SECTION 5
 
 # ---- SECTION 6: Data Tables (HTML widgets saved as standalone) -------------
 cat("Generating Data Tables...\n")
 
-blast.col <- linkBLAST(
-  header = paste0(virome.df$run, "_", virome.df$palm_id, "_", virome.df$nickname),
-  aa.seq = virome.df$node_seq)
-sra.col       <- linkDB(virome.df$run)
-biosample.col <- linkDB(virome.df$bio_sample, DB = "biosample")
+if (isTRUE(api_skip_db)) {
+  # API mode: simplified tables without BLAST/SRA links
+  blast.col <- ""
+  sra.col <- virome.df$run
+  biosample.col <- ""
+  if ("bio_sample" %in% colnames(virome.df)) biosample.col <- virome.df$bio_sample
+  if ("bio_project" %in% colnames(virome.df)) colnames(virome.df)[colnames(virome.df) == "bio_project"] <- "bio_project"
+  # Ensure bio_project column exists
+  if (!("bio_project" %in% colnames(virome.df))) virome.df$bio_project <- ""
+} else {
+  blast.col <- linkBLAST(
+    header = paste0(virome.df$run, "_", virome.df$palm_id, "_", virome.df$nickname),
+    aa.seq = virome.df$node_seq)
+  sra.col       <- linkDB(virome.df$run)
+  biosample.col <- linkDB(virome.df$bio_sample, DB = "biosample")
+}
 
 # Full virome table
 dt_full <- cbind(
