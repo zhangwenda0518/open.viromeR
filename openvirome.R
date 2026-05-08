@@ -230,6 +230,13 @@ parse_args <- function() {
     p$control_type <- ""
   }
 
+  # Diagnostic: print raw parsed args before returning
+  message("DEBUG parse_args:")
+  message("  args received: ", paste(commandArgs(TRUE), collapse = " | "))
+  for (nm in names(p)) {
+    message(sprintf("  p$%s = %s", nm, as.character(p[[nm]])[1]))
+  }
+
   return(p)
 }
 
