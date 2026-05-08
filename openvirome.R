@@ -412,11 +412,20 @@ if (p$search_type == "SEARCH") {
   virome.runs  <- unique(virome.df$run)
 
   # Also get all runs from srarun for "all runs" count (including non-virus)
+  # Note: srarun may have fewer runs than the full SRA database.
+  # If it looks incomplete, fall back to palm_virome runs + virus_df species.
   all_runs_sra <- tbl(con, "srarun") %>%
     dplyr::filter(scientific_name %like% paste0(p$genus_match_term, "%")) %>%
     select(run, scientific_name) %>%
     as.data.frame()
   all.runs     <- unique(all_runs_sra$run)
+
+  # If srarun returned suspiciously few runs (less than virus runs * 1.5),
+  # fall back to virome.df runs as "all runs" for downstream stats
+  if (length(all.runs) < length(unique(virome.runs)) * 1.5) {
+    warning("srarun table appears incomplete. Using palm_virome runs for all-runs stats.")
+    all.runs <- unique(virome.runs)
+  }
 
   # Save scientific_name lookup for species breakdown
   all_runs_sra <- all_runs_sra[!duplicated(all_runs_sra$run), ]
