@@ -409,148 +409,87 @@ api_skip_db <- FALSE
 
 if (p$api_mode && p$search_type == "GENUS") {
   # ---- API MODE: use Open Virome public web API ----
-  API_BASE <- "https://zrdbegawce.execute-api.us-east-1.amazonaws.com/prod"
+  # Exact match of web frontend API call flow:
+  #   /identifiers → get run IDs → /counts with those IDs + groupBy (column name)
 
+  API_BASE <- "https://zrdbegawce.execute-api.us-east-1.amazonaws.com/prod"
   cat("  Using web API (same database as openvirome.com)\n")
 
-  # 1. Get counts grouped by scientific_name (all runs, no palmprint filter)
-  # Use filters approach instead of searchString to avoid 502 issues
-  resp_counts <- httr::POST(
-    paste0(API_BASE, "/counts"),
-    httr::add_headers("Content-Type" = "application/json"),
-    body = jsonlite::toJSON(list(
-      table = "sra",
-      groupBy = "label",
-      filters = list(list(
-        filterType = "label",
-        filterKey = "organism",
-        filterValue = p$genus_match_term,
-        groupByKey = "organism"
-      )),
-      palmprintOnly = FALSE
-    ), auto_unbox = TRUE),
-    encode = "raw"
-  )
-
-  if (httr::status_code(resp_counts) != 200) {
-    stop("API /counts request failed: ", httr::status_code(resp_counts))
-  }
-  api_counts <- jsonlite::fromJSON(httr::content(resp_counts, as = "text", encoding = "UTF-8"))
-
-  # 2. Get identifiers (run_ids) for this search, no palmprint filter
+  # Step 1: /identifiers (all runs, no palmprint filter)
   resp_ids <- httr::POST(
     paste0(API_BASE, "/identifiers"),
     httr::add_headers("Content-Type" = "application/json"),
     body = jsonlite::toJSON(list(
-      filters = list(list(
-        filterType = "label",
-        filterKey = "organism",
-        filterValue = p$genus_match_term,
-        groupByKey = "organism"
-      )),
+      filters = list(list(filterType = "label", filterKey = "organism",
+        filterValue = p$genus_match_term, groupByKey = "organism")),
       palmprintOnly = FALSE
-    ), auto_unbox = TRUE),
-    encode = "raw"
-  )
-  if (httr::status_code(resp_ids) != 200) {
-    stop("API /identifiers request failed: ", httr::status_code(resp_ids))
-  }
-  api_ids <- jsonlite::fromJSON(httr::content(resp_ids, as = "text", encoding = "UTF-8"))
+    ), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
+  if (httr::status_code(resp_ids) != 200) stop("API /identifiers failed: ", httr::status_code(resp_ids))
+  api_ids <- jsonlite::fromJSON(httr::content(resp_ids, as = "text", encoding = "UTF-8"), simplifyDataFrame = FALSE)
+  all_run_ids <- unique(na.omit(unlist(api_ids$run$single)))
+  all.runs <- all_run_ids
 
-  # Extract all runs from API response
-  all_runs_ids <- unique(api_ids$run_id)
-  all.runs <- all_runs_ids[!is.na(all_runs_ids)]
-
-  # 3. Get virus-positive identifiers
-  resp_vir_ids <- httr::POST(
-    paste0(API_BASE, "/identifiers"),
+  # Step 2: /counts (all runs, groupBy="organism", using ids from step 1)
+  resp_counts <- httr::POST(paste0(API_BASE, "/counts"),
     httr::add_headers("Content-Type" = "application/json"),
-    body = jsonlite::toJSON(list(
-      filters = list(list(
-        filterType = "label",
-        filterKey = "organism",
-        filterValue = p$genus_match_term,
-        groupByKey = "organism"
-      )),
-      palmprintOnly = TRUE
-    ), auto_unbox = TRUE),
-    encode = "raw"
-  )
-  api_vir_ids <- jsonlite::fromJSON(httr::content(resp_vir_ids, as = "text", encoding = "UTF-8"))
-  virus_runs_ids <- unique(api_vir_ids$run_id)
+    body = jsonlite::toJSON(list(idColumn = "run", ids = all_run_ids,
+      groupBy = "organism", palmprintOnly = FALSE), auto_unbox = TRUE),
+    encode = "raw", httr::timeout(30))
+  if (httr::status_code(resp_counts) != 200) stop("API /counts (all) failed: ", httr::status_code(resp_counts))
+  api_counts <- jsonlite::fromJSON(httr::content(resp_counts, as = "text", encoding = "UTF-8"))
 
-  # 4. Get results for virus-positive runs from palm_virome table
-  resp_results <- httr::POST(
-    paste0(API_BASE, "/results"),
+  # Step 3: /identifiers (virus-positive only)
+  resp_vir_ids <- httr::POST(paste0(API_BASE, "/identifiers"),
     httr::add_headers("Content-Type" = "application/json"),
-    body = jsonlite::toJSON(list(
-      ids = virus_runs_ids,
-      idColumn = "run_id",
-      table = "palm_virome",
-      columns = "run,bioproject,biosample,organism,sotu,gb_acc,gb_pid,gb_eval,tax_species,tax_family",
-      pageStart = 0,
-      pageEnd = 100000
-    ), auto_unbox = TRUE),
-    encode = "raw"
-  )
-  if (httr::status_code(resp_results) != 200) {
-    stop("API /results request failed: ", httr::status_code(resp_results))
-  }
-  api_results <- jsonlite::fromJSON(httr::content(resp_results, as = "text", encoding = "UTF-8"))
+    body = jsonlite::toJSON(list(filters = list(list(filterType = "label",
+      filterKey = "organism", filterValue = p$genus_match_term, groupByKey = "organism")),
+      palmprintOnly = TRUE), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
+  if (httr::status_code(resp_vir_ids) != 200) stop("API /identifiers (virus) failed: ", httr::status_code(resp_vir_ids))
+  api_vir_ids <- jsonlite::fromJSON(httr::content(resp_vir_ids, as = "text", encoding = "UTF-8"), simplifyDataFrame = FALSE)
+  vir_run_ids <- unique(na.omit(unlist(api_vir_ids$run$single)))
 
-  # Map API column names to virome.df expected format
-  virome.df <- api_results
-  colnames(virome.df)[colnames(virome.df) == "run"] <- "run"
-  colnames(virome.df)[colnames(virome.df) == "organism"] <- "scientific_name"
-  colnames(virome.df)[colnames(virome.df) == "bioproject"] <- "bio_project"
-  colnames(virome.df)[colnames(virome.df) == "biosample"] <- "bio_sample"
-
-  # Fill missing expected columns with NA
-  for (col_needed in c("palm_id", "nickname", "node", "node_coverage",
-                        "node_pid", "node_eval", "node_qc", "node_seq")) {
-    if (!(col_needed %in% colnames(virome.df))) {
-      virome.df[[col_needed]] <- NA
-    }
-  }
-  virome.df$node_qc <- as.logical(virome.df$node_qc)
-  virome.runs <- virus_runs_ids
-
-  # Virus-only counts for species breakdown
-  resp_vir_counts <- httr::POST(
-    paste0(API_BASE, "/counts"),
+  # Step 4: /counts (virus-positive only)
+  resp_vir_counts <- httr::POST(paste0(API_BASE, "/counts"),
     httr::add_headers("Content-Type" = "application/json"),
-    body = jsonlite::toJSON(list(
-      table = "sra",
-      groupBy = "label",
-      filters = list(list(
-        filterType = "label",
-        filterKey = "organism",
-        filterValue = p$genus_match_term,
-        groupByKey = "organism"
-      )),
-      palmprintOnly = TRUE
-    ), auto_unbox = TRUE),
-    encode = "raw"
-  )
+    body = jsonlite::toJSON(list(idColumn = "run", ids = vir_run_ids,
+      groupBy = "organism", palmprintOnly = TRUE), auto_unbox = TRUE),
+    encode = "raw", httr::timeout(30))
   api_vir_counts <- if (httr::status_code(resp_vir_counts) == 200) {
     jsonlite::fromJSON(httr::content(resp_vir_counts, as = "text", encoding = "UTF-8"))
   } else data.frame(name = character(), count = integer())
+
+  # Step 5: /results (palm_virome data for virus runs)
+  resp_results <- httr::POST(paste0(API_BASE, "/results"),
+    httr::add_headers("Content-Type" = "application/json"),
+    body = jsonlite::toJSON(list(ids = vir_run_ids, idColumn = "run_id",
+      table = "palm_virome", columns = "run,bioproject,biosample,organism,sotu,gb_acc,gb_pid,gb_eval,tax_species,tax_family",
+      pageStart = 0, pageEnd = 100000), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
+  if (httr::status_code(resp_results) != 200) stop("API /results failed: ", httr::status_code(resp_results))
+  api_results <- jsonlite::fromJSON(httr::content(resp_results, as = "text", encoding = "UTF-8"))
+
+  # Build virome.df
+  virome.df <- api_results
+  colnames(virome.df)[colnames(virome.df) == "organism"] <- "scientific_name"
+  virome.df$bio_project <- virome.df$bioproject
+  virome.df$bio_sample <- virome.df$biosample
+  for (col_needed in c("palm_id", "nickname", "node", "node_coverage",
+                        "node_pid", "node_eval", "node_qc", "node_seq")) {
+    if (!(col_needed %in% colnames(virome.df))) virome.df[[col_needed]] <- NA
+  }
+  virome.df$node_qc <- as.logical(virome.df$node_qc)
+  virome.runs <- vir_run_ids
 
   # Species breakdown: match all-runs counts with virus counts
   cat("\n  Species breakdown:\n")
   cat(sprintf("  %-45s %6s %6s %6s\n", "Species", "Total", "Virus+", "Virus-"))
   for (i in seq_len(nrow(api_counts))) {
-    sp <- api_counts$name[i]
-    n_all <- api_counts$count[i]
+    sp <- api_counts$name[i]; n_all <- api_counts$count[i]
     virus_idx <- match(sp, api_vir_counts$name)
     n_vir <- if (!is.na(virus_idx)) api_vir_counts$count[virus_idx] else 0
-    n_novir <- n_all - n_vir
-    cat(sprintf("  %-45s %6d %6d %6d\n", sp, n_all, n_vir, n_novir))
+    cat(sprintf("  %-45s %6d %6d %6d\n", sp, n_all, n_vir, n_all - n_vir))
   }
   cat(sprintf("\n  Total SRA runs (all):     %d\n", sum(api_counts$count)))
   cat(sprintf("  Runs with palmprint hits: %d\n", length(virome.runs)))
-  cat(sprintf("  After filtering: %d rows retained\n", nrow(virome.df)))
-  # API mode: skip DB-dependent downstream functions
   api_skip_db <- TRUE
 
 } else if (p$search_type == "SEARCH") {
