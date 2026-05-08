@@ -615,7 +615,7 @@ plot.run.summary <- ggplot(run_summary, aes(Category, Count, fill = Category)) +
 
 png(paste0(p$output.path, p$analysis_name, '_01_run_summary.png'), width = 600, height = 500)
 print(plot.run.summary)
-dev.off()
+invisible(dev.off())
 
 # 1b. Scientific Name Bar Plot (virus-positive runs with target/control split)
 vorgx.df <- virome.df2 %>%
@@ -636,7 +636,7 @@ plot.virome.org <- ggplot(vorgx.df, aes(scientific_name, n, fill = vRNA)) +
 
 png(paste0(p$output.path, p$analysis_name, '_01_run_barplot.png'), width = 1000, height = 450)
 print(plotly::hide_legend(plot.virome.org))
-dev.off()
+invisible(dev.off())
 
 # 1c. SRA Data Type Summary (Polar) — two sets: all runs + virus-only
 # Use all.runs for the "All" summary, virome.df2 runs for the target/control split
@@ -700,7 +700,7 @@ print(plot.sra.all.count)
 print(plot.sra.all.gbp)
 print(plot.sra.count)
 print(plot.sra.gbp)
-dev.off()
+invisible(dev.off())
 
 rm(sra_all.data, sra_all.nt, sra_all.df, sra.data, sra.data.nt)
 
@@ -734,7 +734,7 @@ bp.hist <- ggplot(bp.df, aes(x = bp_n)) +
 png(paste0(p$output.path, p$analysis_name, '_01_bioproject.png'), width = 1000, height = 800)
 print(bp.size)
 print(bp.hist)
-dev.off()
+invisible(dev.off())
 
 # ---- SECTION 2: Virus Family Summary ---------------------------------------
 cat("Generating Virus Family Summary...\n")
@@ -762,7 +762,7 @@ plot.virFam.n <- ggplot(virFam.df, aes(tax_family, n)) +
 
 png(paste0(p$output.path, p$analysis_name, '_02_family_counts.png'), width = 800, height = 400)
 print(plot.virFam.n)
-dev.off()
+invisible(dev.off())
 
 # 2b. Family scatter plot (runs vs sOTU)
 virFam.nrun2 <- unique(virome.df[, c('tax_family', 'run')]) %>% count(tax_family)
@@ -779,7 +779,7 @@ plot.virFam.xy <- ggplot(virFam.df2, aes(n_run, n_sotu, color = tax_family)) +
 
 png(paste0(p$output.path, p$analysis_name, '_02_family_scatter.png'), width = 1000, height = 800)
 print(plotly::hide_legend(plot.virFam.xy))
-dev.off()
+invisible(dev.off())
 
 # 2c. Family vs BioProject Heatmap
 bp.total.n2 <- sra.df %>%
@@ -804,7 +804,7 @@ if (length(virFam.bp[1, ]) > 1) {
     key.title = "",
     key.xlab = "Percent BioProject Virus+",
     margins = c(10, 10), sepcolor = NULL)
-  dev.off()
+  invisible(dev.off())
 }
 
 # 2d. Per-species tax family polar distribution
@@ -825,7 +825,7 @@ virome2.org <- ggplot(vorgx.df2, aes(x = tax_family, n, fill = tax_family)) +
 
 png(paste0(p$output.path, p$analysis_name, '_02_label_summary.png'), width = 1000, height = 800)
 print(virome2.org)
-dev.off()
+invisible(dev.off())
 
 # ---- SECTION 3: sOTU Expression & Frequency --------------------------------
 cat("Generating sOTU Summary...\n")
@@ -857,7 +857,7 @@ virus.exp2 <- ggplot() +
 
 png(paste0(p$output.path, p$analysis_name, '_03_sotu_expression.png'), width = 1200, height = 800)
 print(plotly::hide_legend(virus.exp2))
-dev.off()
+invisible(dev.off())
 
 # Histograms
 virx.df$tax_family2 <- makeTop10(virx.df$tax_family)
@@ -878,7 +878,7 @@ png(paste0(p$output.path, p$analysis_name, '_03_histograms.png'), width = 1000, 
 print(virus.hist.n)
 print(virus.hist.cov)
 print(virus.hist.gbid)
-dev.off()
+invisible(dev.off())
 
 # ---- SECTION 4: Geographical Distribution ----------------------------------
 cat("Generating Geographical Map...\n")
@@ -902,7 +902,7 @@ tryCatch({
 
     png(paste0(p$output.path, p$analysis_name, '_04_geo_map.png'), width = 1000, height = 600)
     print(plot.geo.lycium)
-    dev.off()
+    invisible(dev.off())
   }
 }, error = function(e) {
   cat("  Skipping Geo Mapping:", conditionMessage(e), "\n")
@@ -924,7 +924,7 @@ if (length(V(vir.g)) < 2000 & length(E(vir.g)) < 5000) {
     vertex.color = V(vir.g)$type,
     arrow.mode = "-",
     rescale = TRUE)
-  dev.off()
+  invisible(dev.off())
 
   if (p$export.cytoscape) {
     tryCatch({
@@ -1026,7 +1026,7 @@ print(plot.comp1)
 print(plot.comp2)
 print(plot.comp3)
 print(plot.comp4)
-dev.off()
+invisible(dev.off())
 
 # 5c. sOTU Ranking plot
 i.sotu <- V(vir.g)$type
@@ -1048,7 +1048,7 @@ plot.vrank <- ggplot(vrank.df, aes(pr, vrich, fill = vrank, label = sotu)) +
 
 png(paste0(p$output.path, p$analysis_name, '_05_sotu_vrank.png'), width = 1000, height = 800)
 print(plot.vrank)
-dev.off()
+invisible(dev.off())
 
 # 5d. Palmprint Network
 palm.g <- graph.palm(virome.df$sotu, expanded.graph = FALSE)
@@ -1103,7 +1103,7 @@ rd.plot <- ggplot(palm.degree, aes(degree, alpha = set, fill = setn)) +
 
 png(paste0(p$output.path, p$analysis_name, '_05_palm_degree.png'), width = 800, height = 600)
 print(rd.plot)
-dev.off()
+invisible(dev.off())
 
 rm(ctrl.g, i, n.controlsets, observed.rank, rd.plot)
 
