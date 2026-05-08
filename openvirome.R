@@ -769,53 +769,45 @@ write.csv(virx.df,   paste0(p$output.path, p$analysis_name, '_virome_summary.csv
 if (isTRUE(api_skip_db)) {
   cat("Generating Run Statistics (API mode)...\n")
 
-  # Run count summary
-  all_runs_n <- sum(api_counts$count)
-  virus_runs_n <- length(unique(virome.runs))
-  cat(sprintf("  All SRA runs: %d  |  Virus-positive: %d (%.1f%%)\n",
-              all_runs_n, virus_runs_n,
-              if (all_runs_n > 0) 100 * virus_runs_n / all_runs_n else 0))
-
-  run_summary <- data.frame(
-    Category = c("All SRA Runs", "Virus-Positive Runs"),
-    Count    = c(all_runs_n, virus_runs_n))
-  run_summary$Category <- factor(run_summary$Category,
-                                 levels = c("All SRA Runs", "Virus-Positive Runs"))
-  plot.run.summary <- ggplot(run_summary, aes(Category, Count, fill = Category)) +
-    geom_bar(stat = 'identity') + theme_bw() + theme(legend.position = "none") +
-    scale_fill_manual(values = c('gray60', 'cornflowerblue')) +
-    xlab("") + ylab("Number of SRA Runs") +
-    ggtitle(sprintf("%s: SRA Run Overview (via web API)", p$analysis_name))
-  png(paste0(p$output.path, p$analysis_name, '_01_run_summary.png'), width = 600, height = 500)
-  print(plot.run.summary); invisible(dev.off())
-
-  # Scientific name bar plot from API counts
-  api_counts_plot <- api_counts[order(api_counts$count), ]
-  api_counts_plot$name <- factor(api_counts_plot$name, levels = api_counts_plot$name)
-  plot.sci <- ggplot(api_counts_plot, aes(name, count)) +
-    geom_bar(stat = 'identity', fill = 'cornflowerblue') +
-    coord_flip() + theme_bw() +
-    xlab("Scientific Name") + ylab("All SRA Runs (count)") +
-    ggtitle("All SRA Runs by Species (not only palmprint)")
-  png(paste0(p$output.path, p$analysis_name, '_01_species_all.png'), width = 1000, height = 450)
-  print(plot.sci); invisible(dev.off())
-
-  # Virus-only bar plot from virome.df
-  if ("scientific_name" %in% colnames(virome.df)) {
-    vorgx.df <- virome.df %>% dplyr::count(scientific_name, sort = TRUE)
-    vorgx.df$scientific_name <- factor(vorgx.df$scientific_name,
-      levels = rev(vorgx.df$scientific_name))
-    plot.sci2 <- ggplot(vorgx.df, aes(scientific_name, n)) +
-      geom_bar(stat = 'identity', fill = '#CB4154') +
-      coord_flip() + theme_bw() +
-      xlab("Scientific Name") + ylab("Virus-positive Runs (count)") +
-      ggtitle("Virus-Positive Runs by Species (only palmprint)")
-    png(paste0(p$output.path, p$analysis_name, '_01_species_virus.png'), width = 1000, height = 450)
-    print(plot.sci2); invisible(dev.off())
+  # ---- Build combined species data: All vs Virus+ in one stacked bar ----
+  # api_counts = all runs per species (not only palmprint)
+  # api_vir_counts = virus-positive runs per species (only palmprint)
+  # Merge into one data.frame with species | all | virus | non_virus
+  species_combined <- api_counts
+  colnames(species_combined)[colnames(species_combined) == "count"] <- "total"
+  species_combined$virus <- 0
+  if (nrow(api_vir_counts) > 0) {
+    vir_idx <- match(species_combined$name, api_vir_counts$name)
+    species_combined$virus[!is.na(vir_idx)] <- api_vir_counts$count[vir_idx[!is.na(vir_idx)]]
   }
+  species_combined$non_virus <- species_combined$total - species_combined$virus
 
-  # API mode: no SRA metadata or BioProject analysis (requires get.sraMeta)
-  cat("  Skipping SRA data-type and BioProject plots (requires DB)\n")
+  # Sort by total descending
+  species_combined <- species_combined[order(species_combined$total, decreasing = TRUE), ]
+  species_combined$name <- factor(species_combined$name, levels = rev(species_combined$name))
+
+  # Reshape for stacked bar (ggplot long format)
+  sp_long <- data.frame(
+    species = rep(species_combined$name, 2),
+    count   = c(species_combined$virus, species_combined$non_virus),
+    type    = rep(c("Virus+", "Virus-"), each = nrow(species_combined))
+  )
+
+  plot.stacked <- ggplot(sp_long, aes(count, species, fill = type)) +
+    geom_bar(stat = "identity", position = "stack") +
+    theme_bw() +
+    scale_fill_manual(values = c("Virus+" = "#CB4154", "Virus-" = "gray85")) +
+    xlab("Number of SRA Runs") + ylab("") +
+    ggtitle(sprintf("%s: SRA Runs by Species (total=%d, virus+=%d)",
+                    p$genus_match_term, sum(species_combined$total),
+                    sum(species_combined$virus))) +
+    theme(legend.position = "bottom", legend.title = element_blank())
+
+  png(paste0(p$output.path, p$analysis_name, '_01_species_stacked.png'), width = 1000, height = 500)
+  print(plot.stacked); invisible(dev.off())
+
+  # Also output the combined species table as CSV
+  write.csv(species_combined, paste0(p$output.path, p$analysis_name, '_01_species_combined.csv'), row.names = FALSE)
 
 } else {
   cat("Generating Run Statistics...\n")
