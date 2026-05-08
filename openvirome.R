@@ -361,6 +361,8 @@ if (!dir.exists(p$output.path)) {
 # Establish Serratus server connection (skipped in API mode)
 if (!p$api_mode) {
   con <- SerratusConnect()
+} else {
+  con <- NULL
 }
 
 # Input files
@@ -429,7 +431,10 @@ if (p$api_mode && p$search_type == "GENUS") {
   # Exact match of web frontend API call flow:
   #   /identifiers → get run IDs → /counts with those IDs + groupBy (column name)
 
-  API_BASE <- "https://zrdbegawce.execute-api.us-east-1.amazonaws.com/prod"
+  # Use proxy if set (for servers behind GFW)
+  p$api_proxy <- Sys.getenv("OV_API_PROXY")
+  API_BASE <- if (p$api_proxy != "") p$api_proxy else
+    "https://zrdbegawce.execute-api.us-east-1.amazonaws.com/prod"
   cat("  Using web API (same database as openvirome.com)\n")
 
   # Step 1: /identifiers (all runs, no palmprint filter)
@@ -483,6 +488,56 @@ if (p$api_mode && p$search_type == "GENUS") {
       pageStart = 0, pageEnd = 100000), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
   if (httr::status_code(resp_results) != 200) stop("API /results failed: ", httr::status_code(resp_results))
   api_results <- parse_api_response(resp_results)
+
+  # Step 6: /results for SRA metadata (same virus run IDs, sra table)
+  cat("  Fetching SRA metadata via API...\n")
+  biosample_ids <- unique(na.omit(api_results$biosample))
+  resp_sra <- tryCatch(httr::POST(paste0(API_BASE, "/results"),
+    httr::add_headers("Content-Type" = "application/json"),
+    body = jsonlite::toJSON(list(ids = vir_run_ids, idColumn = "run_id", table = "sra",
+      columns = "acc,assay_type,center_name,organism,bioproject,mbytes,mbases,librarylayout,instrument",
+      pageStart = 0, pageEnd = 100000), auto_unbox = TRUE), encode = "raw", httr::timeout(30)), error = function(e) NULL)
+  # Step 7: /results for host tissue data
+  cat(sprintf("  Fetching host data for %d biosamples...\n", length(biosample_ids)))
+  resp_host <- tryCatch(httr::POST(paste0(API_BASE, "/results"),
+    httr::add_headers("Content-Type" = "application/json"),
+    body = jsonlite::toJSON(list(ids = biosample_ids, idColumn = "biosample_id",
+      table = "biosample_tissue", columns = "biosample_id,text,tissue,bto_id",
+      pageStart = 0, pageEnd = 100000), auto_unbox = TRUE), encode = "raw", httr::timeout(30)), error = function(e) NULL)
+  # Step 8: /results for ecology geography data
+  cat(sprintf("  Fetching geography for %d biosamples...\n", min(length(biosample_ids), 500)))
+  resp_eco <- tryCatch(httr::POST(paste0(API_BASE, "/results"),
+    httr::add_headers("Content-Type" = "application/json"),
+    body = jsonlite::toJSON(list(ids = biosample_ids[1:min(500, length(biosample_ids))],
+      idColumn = "accession", table = "bgl_gm4326_gp4326",
+      columns = "accession,attribute_name,attribute_value,country,biome,elevation",
+      pageStart = 0, pageEnd = 100000), auto_unbox = TRUE), encode = "raw", httr::timeout(30)), error = function(e) NULL)
+
+  # Parse additional tables
+  sra_table_ok <- FALSE; host_table_ok <- FALSE; eco_table_ok <- FALSE
+  if (!is.null(resp_sra) && httr::status_code(resp_sra) == 200) {
+    sra_table <- parse_api_response(resp_sra)
+    if (is.data.frame(sra_table) && nrow(sra_table) > 0) {
+      sra_table_ok <- TRUE
+      sra.df <- sra_table  # for downstream ggplot/bp analysis
+      colnames(sra.df)[colnames(sra.df) %in% c("acc", "bioproject")] <- c("run_id", "bioproject")
+      cat(sprintf("  SRA table: %d runs\n", nrow(sra_table)))
+    }
+  }
+  if (!is.null(resp_host) && httr::status_code(resp_host) == 200) {
+    host_table <- parse_api_response(resp_host)
+    if (is.data.frame(host_table) && nrow(host_table) > 0) {
+      host_table_ok <- TRUE
+      cat(sprintf("  Host table: %d biosamples\n", nrow(host_table)))
+    }
+  }
+  if (!is.null(resp_eco) && httr::status_code(resp_eco) == 200) {
+    eco_table <- parse_api_response(resp_eco)
+    if (is.data.frame(eco_table) && nrow(eco_table) > 0) {
+      eco_table_ok <- TRUE
+      cat(sprintf("  Ecology table: %d records\n", nrow(eco_table)))
+    }
+  }
 
   # Build virome.df
   virome.df <- api_results
@@ -949,6 +1004,7 @@ print(plotly::hide_legend(plot.virFam.xy))
 invisible(dev.off())
 
 # 2c. Family vs BioProject Heatmap
+if (exists("sra.df") && is.data.frame(sra.df)) {
 bp.total.n2 <- sra.df %>%
   count(bioproject, sort = TRUE)
 virFam.bp <- virome.df[, c('tax_family', 'bio_project')]
@@ -972,6 +1028,7 @@ if (length(virFam.bp[1, ]) > 1) {
     key.xlab = "Percent BioProject Virus+",
     margins = c(10, 10), sepcolor = NULL)
   invisible(dev.off())
+}
 }
 
 # 2d. Per-species tax family polar distribution
@@ -1185,9 +1242,6 @@ if (!isTRUE(api_skip_db)) {
   palm_ctrl_ok <- FALSE
   cat("  API mode: using simplified network stats (degree as vrank)\n")
 }
-
-library(igraph)
-vir.g <- graph.virome2(virome.df)
 
 # 5a. Bipartite network plot
 if (length(V(vir.g)) < 2000 & length(E(vir.g)) < 5000) {
@@ -1464,7 +1518,7 @@ if (isTRUE(api_skip_db)) {
       paste0(API_BASE, "/results"),
       httr::add_headers("Content-Type" = "application/json"),
       body = jsonlite::toJSON(list(
-        ids = virus_runs_ids,
+        ids = virome.runs,
         idColumn = "run_id",
         table = "sra",
         columns = "acc,assay_type,center_name,organism,bioproject,mbytes,mbases,librarylayout,instrument",
