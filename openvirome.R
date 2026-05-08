@@ -524,16 +524,19 @@ if (p$api_mode && p$search_type == "GENUS") {
 
 } else if (p$search_type == "GENUS") {
   api_skip_db <- TRUE   # local-only analysis, fast
-  # Fast path: single DB query, all analysis local (same speed as web)
+  # Single palm_virome query for virus data (fast, like web version)
   virome.df    <- get.palmVirome(org.search = paste0(p$genus_match_term, "%"))
   virome.runs  <- unique(virome.df$run)
-  all.runs     <- virome.runs  # use virus runs as all-runs (fast, srarun is incomplete anyway)
-  # Species breakdown from virome.df directly
-  sp_breakdown <- sort(table(as.character(virome.df$scientific_name)), decreasing = TRUE)
-  cat("\n  Species breakdown (virus-positive runs):\n")
-  for (i in seq_along(sp_breakdown)) {
-    cat(sprintf("    %-40s %5d\n", names(sp_breakdown)[i], sp_breakdown[i]))
-  }
+
+  # Quick srarun query for all-runs count + species list (includes non-virus runs)
+  all_runs_sra <- tbl(con, "srarun") %>%
+    dplyr::filter(scientific_name %like% paste0(p$genus_match_term, "%")) %>%
+    select(run, scientific_name) %>%
+    as.data.frame()
+  all.runs <- unique(all_runs_sra$run)
+  # Save for Species-Level Summary
+  all_runs_sra <- all_runs_sra[!duplicated(all_runs_sra$run), ]
+  rownames(all_runs_sra) <- NULL
 
 } else if (p$search_type == "LIST") {
   if (is.null(p$input.list)) stop("LIST mode requires --input_path")
@@ -674,7 +677,12 @@ cat(sprintf("  Virus-positive runs: %d, unique sOTUs: %d\n",
             length(unique(virome.runs)), nrow(virx.df)))
 
 # ---- Control Virome --------------------------------------------------------
-if (!isTRUE(api_skip_db) && p$doControl) {
+# In fast mode (api_skip_db=TRUE), skip control set (no DB queries)
+if (isTRUE(api_skip_db)) {
+  p$doControl <- FALSE
+  negVirome.df <- NULL
+}
+if (p$doControl) {
   if (p$control_type == "LIST") {
     negVirome.df <- get.negativeVirome(run.vec = virome.runs)
 
