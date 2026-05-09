@@ -510,11 +510,18 @@ if (p$api_mode && p$search_type == "GENUS") {
     "run,bioproject,biosample,organism,sotu,gb_acc,gb_pid,gb_eval,tax_species,tax_family")
 
   if (nrow(api_results) == 0) {
-    cat("  WARNING: No palm_virome results. Creating empty virome.df.\n")
-    virome.df <- data.frame(run = character(), scientific_name = character(),
-      bio_project = character(), bio_sample = character(), sotu = character(),
-      gb_acc = character(), gb_pid = numeric(), tax_species = character(),
-      tax_family = character(), stringsAsFactors = FALSE)
+    # Fallback: build virome-like df from species identifiers alone
+    cat("  WARNING: No palm_virome results from /results endpoint.\n")
+    cat("  Using /counts data instead for summary-level analysis.\n")
+    # Build minimal virome.df: one row per virus run with species name
+    sp_names <- names(species_vir)
+    sp_counts <- as.integer(species_vir)
+    virome.df <- data.frame(
+      run = paste0("run_", seq_len(sum(sp_counts))),
+      scientific_name = rep(sp_names, sp_counts),
+      bio_project = "", bio_sample = "", sotu = "unknown",
+      gb_acc = "", gb_pid = 0, tax_species = "", tax_family = "",
+      stringsAsFactors = FALSE)
   } else {
     virome.df <- api_results
     colnames(virome.df)[colnames(virome.df) == "organism"] <- "scientific_name"
