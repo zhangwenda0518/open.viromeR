@@ -288,6 +288,7 @@ suppressPackageStartupMessages({
   library(plotly)
   library(viridis)
   library(DT)
+  library(ggrepel)
 })
 
 # ---- Local polyfills for open.viromeR functions (API mode / no package) ----
@@ -563,6 +564,8 @@ if (p$api_mode && p$search_type == "GENUS") {
     if (!(col_needed %in% colnames(virome.df))) virome.df[[col_needed]] <- NA
   }
   virome.df$node_qc <- as.logical(virome.df$node_qc)
+  # Ensure numeric columns
+  if ("gb_pid" %in% colnames(virome.df)) virome.df$gb_pid <- as.numeric(virome.df$gb_pid)
 
   # Species breakdown (API mode — one concise table)
   cat("\n  Species breakdown:\n")
