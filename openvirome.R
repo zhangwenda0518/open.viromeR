@@ -567,6 +567,49 @@ if (p$api_mode && p$search_type == "GENUS") {
   # Ensure numeric columns
   if ("gb_pid" %in% colnames(virome.df)) virome.df$gb_pid <- as.numeric(virome.df$gb_pid)
 
+  # ---- Fetch SRA / Host / Ecology tables (for downstream plots) ------------
+  biosample_ids <- unique(na.omit({
+    if ("biosample" %in% colnames(virome.df)) virome.df$biosample else virome.df$bio_sample
+  }))
+  cat("  Fetching SRA, Host, Ecology tables...\n")
+  tryCatch({
+    sra_tmp <- httr::POST(paste0(API_BASE, "/results"),
+      httr::add_headers("Content-Type" = "application/json"),
+      body = jsonlite::toJSON(list(ids = as.list(virome.runs), idColumn = "run_id",
+        table = "sra", columns = "acc,assay_type,center_name,organism,bioproject,mbytes,mbases,librarylayout,instrument",
+        pageEnd = 1000), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
+    if (httr::status_code(sra_tmp) == 200) {
+      sra_table <- parse_api_response(sra_tmp)
+      cat(sprintf("  SRA: %d runs\n", nrow(sra_table)))
+      write.csv(sra_table, paste0(p$output.path, "open-virome-Sra.csv"), row.names = FALSE)
+    }
+  }, error = function(e) NULL)
+  if (length(biosample_ids) > 0) {
+    tryCatch({
+      host_tmp <- httr::POST(paste0(API_BASE, "/results"),
+        httr::add_headers("Content-Type" = "application/json"),
+        body = jsonlite::toJSON(list(ids = as.list(biosample_ids), idColumn = "biosample_id",
+          table = "biosample_tissue", columns = "biosample_id,text,tissue,bto_id",
+          pageEnd = 1000), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
+      if (httr::status_code(host_tmp) == 200) {
+        host_table <- parse_api_response(host_tmp)
+        cat(sprintf("  Host: %d records\n", nrow(host_table)))
+        write.csv(host_table, paste0(p$output.path, "open-virome-Host.csv"), row.names = FALSE)
+      }
+      eco_tmp <- httr::POST(paste0(API_BASE, "/results"),
+        httr::add_headers("Content-Type" = "application/json"),
+        body = jsonlite::toJSON(list(ids = as.list(biosample_ids[1:min(500, length(biosample_ids))]),
+          idColumn = "accession", table = "bgl_gm4326_gp4326",
+          columns = "accession,attribute_name,attribute_value,country,biome,elevation",
+          pageEnd = 1000), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
+      if (httr::status_code(eco_tmp) == 200) {
+        eco_table <- parse_api_response(eco_tmp)
+        cat(sprintf("  Ecology: %d records\n", nrow(eco_table)))
+        write.csv(eco_table, paste0(p$output.path, "open-virome-Ecology.csv"), row.names = FALSE)
+      }
+    }, error = function(e) NULL)
+  }
+
   # Species breakdown (API mode — one concise table)
   cat("\n  Species breakdown:\n")
   cat(sprintf("  %-45s %6s %6s %6s\n", "Species", "Total", "Virus+", "Virus-"))
@@ -1341,59 +1384,6 @@ dt_summary <- cbind(
 # Embed DT tables directly into the main HTML report (no standalone files)
 dt_full_html  <- paste(capture.output(print(dt_full)), collapse = "\n")
 dt_summary_html <- paste(capture.output(print(dt_summary)), collapse = "\n")
-
-# ---- Export SRA / Host / Ecology tables (web-style naming) ------------------
-if (isTRUE(api_skip_db)) {
-  # API mode: fetch these tables from the web API
-  biosample_ids_all <- unique(na.omit(virome.df$bio_sample))
-
-  # SRA table
-  cat("  Fetching SRA metadata...\n")
-  tryCatch({
-    sra_resp <- httr::POST(paste0(API_BASE, "/results"),
-      httr::add_headers("Content-Type" = "application/json"),
-      body = jsonlite::toJSON(list(ids = as.list(virome.runs), idColumn = "run_id",
-        table = "sra", columns = "acc,assay_type,center_name,organism,bioproject,mbytes,mbases,librarylayout,instrument",
-        pageEnd = 1000), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
-    if (httr::status_code(sra_resp) == 200) {
-      sra_table <- parse_api_response(sra_resp)
-      write.csv(sra_table, paste0(p$output.path, "open-virome-Sra.csv"), row.names = FALSE)
-    }
-  }, error = function(e) NULL)
-
-  # Host table
-  if (length(biosample_ids_all) > 0) {
-    cat("  Fetching host/tissue metadata...\n")
-    tryCatch({
-      host_resp <- httr::POST(paste0(API_BASE, "/results"),
-        httr::add_headers("Content-Type" = "application/json"),
-        body = jsonlite::toJSON(list(ids = as.list(biosample_ids_all), idColumn = "biosample_id",
-          table = "biosample_tissue", columns = "biosample_id,text,tissue,bto_id",
-          pageEnd = 1000), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
-      if (httr::status_code(host_resp) == 200) {
-        host_table <- parse_api_response(host_resp)
-        write.csv(host_table, paste0(p$output.path, "open-virome-Host.csv"), row.names = FALSE)
-      }
-    }, error = function(e) NULL)
-  }
-
-  # Ecology table
-  if (length(biosample_ids_all) > 0) {
-    cat("  Fetching ecology/geography metadata...\n")
-    tryCatch({
-      eco_resp <- httr::POST(paste0(API_BASE, "/results"),
-        httr::add_headers("Content-Type" = "application/json"),
-        body = jsonlite::toJSON(list(ids = as.list(biosample_ids_all[1:min(500, length(biosample_ids_all))]),
-          idColumn = "accession", table = "bgl_gm4326_gp4326",
-          columns = "accession,attribute_name,attribute_value,country,biome,elevation",
-          pageEnd = 1000), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
-      if (httr::status_code(eco_resp) == 200) {
-        eco_table <- parse_api_response(eco_resp)
-        write.csv(eco_table, paste0(p$output.path, "open-virome-Ecology.csv"), row.names = FALSE)
-      }
-    }, error = function(e) NULL)
-  }
-}
 
 # ---- Save Workspace --------------------------------------------------------
 cat("Saving workspace...\n")
