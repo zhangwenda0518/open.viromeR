@@ -290,6 +290,19 @@ suppressPackageStartupMessages({
   library(DT)
 })
 
+# ---- Local polyfills for open.viromeR functions (needed in API mode) ------
+if (!requireNamespace("open.viromeR", quietly = TRUE)) {
+  makeTop10 <- function(invec, top.n = 10, rename = "Other") {
+    invec <- as.character(invec)
+    t10 <- table(invec)
+    t10 <- t10[rev(order(t10))]
+    t10_entries <- rownames(t10)[1:min(top.n, nrow(t10))]
+    invec2 <- invec
+    invec2[!(invec2 %in% t10_entries)] <- rename
+    factor(invec2, levels = c(t10_entries, rename))
+  }
+}
+
 # ---- DeepSeek LLM Client (no extra packages needed, uses base R) -----------
 # Resolve API key: CLI argument takes priority, then environment variable
 deepseek_api_key <- p$deepseek_api_key
@@ -452,7 +465,11 @@ if (p$api_mode && p$search_type == "GENUS") {
       httr::add_headers("Content-Type" = "application/json"),
       body = jsonlite::toJSON(body, auto_unbox = TRUE), encode = "raw",
       httr::timeout(60))
-    if (httr::status_code(resp) != 200) return(data.frame())
+    sc <- httr::status_code(resp)
+    if (sc != 200) {
+      cat(sprintf("  [DEBUG] /results failed: HTTP %d for table=%s with %d ids\n", sc, table, length(ids)))
+      return(data.frame())
+    }
     parse_api_response(resp)
   }
 
