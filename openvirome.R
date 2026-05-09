@@ -444,15 +444,23 @@ if (p$api_mode && p$search_type == "GENUS") {
     parse_api_response(resp, simplify = FALSE)
   }
 
-  api_results_call <- function(ids, table, cols) {
+  api_results_call <- function(ids, table, cols, batch_size = 50) {
     if (length(ids) == 0) return(data.frame())
-    resp <- httr::POST(paste0(API_BASE, "/results"),
-      httr::add_headers("Content-Type" = "application/json"),
-      body = jsonlite::toJSON(list(ids = ids, idColumn = "run_id",
-        table = table, columns = cols, pageStart = 0, pageEnd = 100000),
-        auto_unbox = TRUE), encode = "raw", httr::timeout(30))
-    if (httr::status_code(resp) != 200) return(data.frame())
-    parse_api_response(resp)
+    all_parts <- list()
+    for (start in seq(1, length(ids), batch_size)) {
+      batch <- ids[start:min(start + batch_size - 1, length(ids))]
+      resp <- httr::POST(paste0(API_BASE, "/results"),
+        httr::add_headers("Content-Type" = "application/json"),
+        body = jsonlite::toJSON(list(ids = batch, idColumn = "run_id",
+          table = table, columns = cols, pageStart = 0, pageEnd = 100000),
+          auto_unbox = TRUE), encode = "raw", httr::timeout(60))
+      if (httr::status_code(resp) == 200) {
+        part <- parse_api_response(resp)
+        if (is.data.frame(part) && nrow(part) > 0) all_parts[[length(all_parts)+1]] <- part
+      }
+    }
+    if (length(all_parts) == 0) return(data.frame())
+    do.call(rbind, all_parts)
   }
 
   # Step 1: /counts with searchString + pageEnd=100000 (force materialized view)
