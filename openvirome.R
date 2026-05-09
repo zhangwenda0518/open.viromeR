@@ -247,7 +247,7 @@ parse_args <- function() {
 # This makes the script self-contained — no manual `install.packages` needed.
 required_packages <- c(
   "dplyr", "ggplot2", "igraph", "plotly", "viridis", "DT",
-  "htmlwidgets", "gplots", "reshape2", "jsonlite", "httr", "base64enc"
+  "htmlwidgets", "gplots", "reshape2", "jsonlite", "httr", "base64enc", "ggrepel"
 )
 for (pkg in required_packages) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
@@ -960,50 +960,41 @@ virome2.org <- ggplot(vorgx.df2, aes(x = tax_family, n, fill = tax_family)) +
 png(paste0(p$output.path, p$analysis_name, '_02_label_summary.png'), width = OV_W, height = OV_H)
 print(virome2.org); invisible(dev.off())
 
-# ---- SECTION 3: sOTU Expression & Frequency --------------------------------
-cat("Generating sOTU Summary...\n")
-ranklvl  <- c("phylum", "family", "genus", "species")
-virx.df$gb_match <- ranklvl[1]
-virx.df$gb_match[which(virx.df$gb_pid >= 45)] <- ranklvl[2]
-virx.df$gb_match[which(virx.df$gb_pid >= 70)] <- ranklvl[3]
-virx.df$gb_match[which(virx.df$gb_pid >= 90)] <- ranklvl[4]
-virx.df$gb_match <- factor(virx.df$gb_match, levels = ranklvl)
-virx.df$plot_name <- makeTop10(virx.df$tax_family)
+# ---- SECTION 3: Virus Family Expression Summary (replaces sOTU) ------------
+cat("Generating Virus Family Expression Summary...\n")
+# Focus on Virus Family level, not sOTU (matches web frontend approach)
+virFam.summary <- virome.df %>%
+  dplyr::group_by(tax_family) %>%
+  dplyr::summarise(
+    n_runs = n_distinct(run),
+    n_sotus = n_distinct(sotu),
+    mean_gb_pid = mean(gb_pid, na.rm = TRUE),
+    .groups = "drop") %>%
+  dplyr::arrange(desc(n_runs))
+virFam.summary$tax_family <- makeTop10(virFam.summary$tax_family)
 
-virus.exp2 <- ggplot(virx.df, aes(x = n, y = gb_pid)) +
-  geom_point(aes(size = log(mean_coverage + 1), color = log(mean_coverage + 1)),
-             alpha = 0.6) +
-  geom_hline(yintercept = 90, color = "#e74c3c", linetype = "dashed", linewidth = 0.5) +
-  scale_color_viridis(option = "plasma") +
-  scale_x_log10() + scale_y_log10() + scale_size_identity() +
-  labs(title = "sOTU Expression Landscape",
-       subtitle = "Frequency in SRA vs GenBank identity. Dashed line = 90% species threshold.",
-       x = "sOTU Frequency", y = "GenBank Identity (%)") +
-  theme_ov() + facet_wrap(~plot_name, ncol = 4)
+# Family prevalence across runs (horizontal bar)
+p_fam_expr <- ggplot(head(virFam.summary, 15), aes(n_runs, reorder(tax_family, n_runs), fill = n_runs)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  geom_text(aes(label = n_runs), hjust = -0.2, size = 3.5) +
+  scale_fill_gradient(low = "#56B4E9", high = "#D55E00") +
+  labs(title = "Virus Family Distribution by Run Count", x = "Number of Runs", y = "") +
+  theme_ov() + theme(legend.position = "none")
+png(paste0(p$output.path, p$analysis_name, '_03_family_expression.png'), width = OV_W, height = OV_H)
+print(p_fam_expr); invisible(dev.off())
 
-png(paste0(p$output.path, p$analysis_name, '_03_sotu_expression.png'), width = OV_W, height = OV_H)
-print(plotly::hide_legend(virus.exp2)); invisible(dev.off())
-
-# Three histograms — use grid.arrange to avoid overwrite bug (Bizard fix)
-virx.df$tax_family2 <- makeTop10(virx.df$tax_family)
-virx.df$n_log <- log10(pmax(virx.df$n, 1))
-virx.df$cov_log <- log10(pmax(virx.df$mean_coverage, 1))
-p1 <- ggplot(virx.df, aes(n_log, fill = tax_family2)) +
-  geom_histogram(bins = 30, alpha = 0.8) +
-  scale_fill_viridis(discrete = TRUE, option = "D") +
-  labs(title = "sOTU Frequency", x = "log10(Frequency)", y = "") + theme_ov()
-p2 <- ggplot(virx.df, aes(cov_log, fill = tax_family2)) +
-  geom_histogram(bins = 30, alpha = 0.8) +
-  scale_fill_viridis(discrete = TRUE, option = "D") +
-  labs(title = "Mean Coverage", x = "log10(Coverage)", y = "") + theme_ov()
-p3 <- ggplot(virx.df, aes(gb_pid, fill = tax_family2)) +
-  geom_histogram(bins = 30, alpha = 0.8) +
-  scale_fill_viridis(discrete = TRUE, option = "D") +
-  labs(title = "GenBank Identity", x = "% Identity", y = "") + theme_ov()
-
-png(paste0(p$output.path, p$analysis_name, '_03_histograms.png'), width = OV_W, height = 1000)
-gridExtra::grid.arrange(p1, p2, p3, ncol = 1)
-invisible(dev.off())
+# Family: sOTU diversity vs GB identity scatter
+p_fam_scatter <- ggplot(virFam.summary, aes(n_sotus, mean_gb_pid, size = n_runs)) +
+  geom_point(aes(color = n_runs), alpha = 0.8) +
+  geom_hline(yintercept = 90, color = "#D55E00", linetype = "dashed", linewidth = 0.4) +
+  scale_color_gradient(low = "#56B4E9", high = "#D55E00") +
+  geom_text_repel(aes(label = tax_family), size = 3, max.overlaps = 8) +
+  labs(title = "Family sOTU Diversity vs GenBank Identity",
+       subtitle = "Dashed line = 90% species threshold. Size = number of runs.",
+       x = "sOTU Diversity", y = "Mean GenBank Identity (%)") +
+  theme_ov()
+png(paste0(p$output.path, p$analysis_name, '_03_family_diversity.png'), width = OV_W, height = OV_H_SM)
+print(p_fam_scatter); invisible(dev.off())
 
 # ---- SECTION 4: Geographical Distribution ----------------------------------
 cat("Generating Geographical Map...\n")
@@ -1344,17 +1335,7 @@ dt_summary <- cbind(
     rownames = FALSE, filter = "top", escape = FALSE,
     options = list(ordering = TRUE, order = list(list(2, 'desc')), pageLength = 20, scrollX = TRUE))
 
-# Save standalone interactive tables AND CSV
-htmlwidgets::saveWidget(dt_full,
-  paste0(p$output.path, p$analysis_name, '_06_full_table.html'), selfcontained = TRUE)
-htmlwidgets::saveWidget(dt_summary,
-  paste0(p$output.path, p$analysis_name, '_06_summary_table.html'), selfcontained = TRUE)
-
-# Export raw CSV tables for reproducibility
-write.csv(virome.df, paste0(p$output.path, p$analysis_name, '_virome_raw.csv'), row.names = FALSE)
-write.csv(virx.df,   paste0(p$output.path, p$analysis_name, '_virome_summary_raw.csv'), row.names = FALSE)
-
-# Generate embeddable HTML snippets for the main report
+# Embed DT tables directly into the main HTML report (no standalone files)
 dt_full_html  <- paste(capture.output(print(dt_full)), collapse = "\n")
 dt_summary_html <- paste(capture.output(print(dt_summary)), collapse = "\n")
 
@@ -1426,12 +1407,12 @@ png_files <- sort(png_files)
 section_map <- list(
   "_01_"  = "SRA Run Statistics",
   "_02_"  = "Virus Family Summary",
-  "_03_"  = "sOTU Expression & Frequency",
+  "_03_"  = "Virus Family Expression",
   "_04_"  = "Geographical Distribution",
-  "_05_network"  = "Virome Network Analysis",
+  "_05_network"  = "Virome Network",
   "_05_top"  = "Ecology / Geography",
-  "_05_tissue"  = "Host / Tissue Analysis",
-  "_05_host"  = "Host / Source Description",
+  "_05_tissue"  = "Host / Tissue",
+  "_05_host"  = "Host / Source",
   "_06_"  = "Data Tables"
 )
 
@@ -1513,56 +1494,39 @@ llm_bioproject <- ""; llm_virome <- ""; llm_ecology <- ""; llm_host <- ""; llm_n
 if (use_llm && nrow(virome.df) > 0) {
   cat("Generating LLM analysis summaries...\n")
 
-  # Helper: extract bioproject IDs from the data
-  get_bioproject_ids <- function() {
-    if (exists("sra_table") && is.data.frame(sra_table) && "bioproject" %in% colnames(sra_table)) {
-      bp <- sort(table(as.character(sra_table$bioproject)), decreasing = TRUE)
-      return(names(bp))
-    }
-    if ("bio_project" %in% colnames(virome.df)) {
-      bp <- sort(table(as.character(virome.df$bio_project)), decreasing = TRUE)
-      return(names(bp[bp != ""]))
-    }
-    return(character(0))
+  # Helper: extract bioproject IDs from API results
+  bp_ids <- character(0)
+  if (exists("sra_table") && is.data.frame(sra_table) && "bioproject" %in% colnames(sra_table)) {
+    bp_tbl <- sort(table(as.character(sra_table$bioproject)), decreasing = TRUE)
+    bp_ids <- unique(names(bp_tbl))
   }
-  bp_ids <- get_bioproject_ids()
-  bp_context <- if (length(bp_ids) > 0)
-    paste(sprintf("BioProject IDs in this analysis: %s", paste(bp_ids, collapse = ", ")))
-    else ""
-  bp_limit_note <- "**Do not list more than 5 bioprojects in a single reference**. Instead, list the top 5 most relevant bioprojects and add \"+more\" to indicate that there are more."
+  if (length(bp_ids) == 0 && "bio_project" %in% colnames(virome.df)) {
+    bp_tbl <- sort(table(as.character(virome.df$bio_project)), decreasing = TRUE)
+    bp_ids <- unique(names(bp_tbl[bp_tbl > 0]))
+  }
+  bp_context <- if (length(bp_ids) > 0) paste(sprintf("BioProjects: %s", paste(bp_ids, collapse = ", "))) else ""
+  bp_limit_note <- "**Do not list more than 5 bioprojects in a single reference**."
 
-  # ---- 1. BioProject / SRA Summarization (matching getBioProjectsSummarizationPrompt) ----
-  if (length(bp_ids) > 0) {
-    cat("  [LLM] 1/5 BioProject summary...\n")
-    llm_bioproject <- ds_chat(
-      paste0(
-        "---Role---\n\n",
-        "You are a helpful bioinformatics research assistant being used to ",
-        "summarize research projects for display on a wikipedia-like page.\n\n",
-        "---Goal---\n\n",
-        "Follow the instructions to summarize BioProjects:\n",
-        "1. Provide a succinct overview of the high-level ideas covered by the ",
-        "bioproject titles, names, and descriptions, no longer than a paragraph.\n",
-        "2. For each overarching topic in the summarization, cite all relevant ",
-        "bioproject ID(s).\n",
-        "3. DO NOT reference any bioprojects that aren't given in the list.\n",
-        "4. ONLY use the information provided in the bioprojects to generate ",
-        "the summary.\n",
-        "5. Avoid using any external information or knowledge.\n\n",
-        "---Target response length and format---\n\n",
-        "One paragraph\n\n",
-        "Use standard markdown delimiter ** to surround/highlight important ",
-        "topics or keywords in the bioprojects, DO NOT ADD THEM TO BIOPROJECT IDs.\n\n",
-        "DO NOT use any other delimiter in your summary, unless it is part of ",
-        "the bioprojects title/description.\n",
-        bp_limit_note, "\n\n---\n"
-      ),
-      sprintf("BioProjects analyzed: %s\n\nAdditional context:\nSearch genus: %s\nTotal runs: %d\nVirus-positive runs: %d\nUnique sOTUs: %d\nVirus families: %d",
-              bp_context, p$genus_match_term, length(unique(all.runs)),
-              length(unique(virome.runs)), length(unique(virome.df$sotu)),
-              length(unique(virome.df$tax_family))))
-    cat(sprintf("  [LLM] BioProject: %d chars\n", nchar(llm_bioproject)))
+  # ---- 1. SRA / BioProject Summary (always runs, even without BioProject IDs) ----
+  cat("  [LLM] 1/5 SRA / Data summary...\n")
+  sra_desc <- if (exists("sra_table") && is.data.frame(sra_table)) {
+    at <- sort(table(sra_table$assay_type), decreasing = TRUE)
+    sprintf("Assay types: %s. Total Gbp: %.1f. Instruments: %s.",
+            paste(names(at), at, sep = "=", collapse = ", "),
+            sum(as.numeric(sra_table$mbases), na.rm = TRUE)/1e9,
+            paste(names(sort(table(sra_table$instrument), decreasing = TRUE)[1:3]), collapse = ", "))
+  } else ""
+  llm_bioproject <- ds_chat(
+    "You are a bioinformatics research assistant. Provide a concise one-paragraph summary of the SRA sequencing run metadata for this plant virome study. Cover: total runs, assay types, sequencing centers, total Gbp, and the BioProjects involved. Use ** for key terms. ONLY use provided data.",
+    sprintf("Search genus: %s\nTotal runs: %d\nVirus-positive: %d\nVirus families: %d\n%s\n%s",
+            p$genus_match_term, length(unique(all.runs)), length(unique(virome.runs)),
+            length(unique(virome.df$tax_family)), sra_desc, bp_context))
+  if (nchar(llm_bioproject) < 10) {
+    llm_bioproject <- sprintf("SRA summary: %d total runs, %d virus-positive, %d virus families detected in genus %s.",
+                              length(unique(all.runs)), length(unique(virome.runs)),
+                              length(unique(virome.df$tax_family)), p$genus_match_term)
   }
+  cat(sprintf("  [LLM] SRA/BioProject: %d chars\n", nchar(llm_bioproject)))
 
   # ---- 2. Virome Summarization (matching getViromeSummarizationPrompt) ----
   cat("  [LLM] 2/5 Virome summary...\n")
@@ -1570,10 +1534,8 @@ if (use_llm && nrow(virome.df) > 0) {
     genus = p$genus_match_term,
     total_runs_all = length(unique(all.runs)),
     total_runs_virus = length(unique(virome.runs)),
-    total_sotu = length(unique(virome.df$sotu)),
     total_families = length(unique(virome.df$tax_family)),
     top_families = as.data.frame(sort(table(as.character(virome.df$tax_family)), decreasing = TRUE)[1:10]),
-    top_sotus = head(vrank.df[, c("sotu", "nruns", "vrank")], 15),
     components = as.list(cs.df[1:min(5, nrow(cs.df)), c("component", "n_sotu", "n_run", "n_edge")]),
     bioprojects = bp_ids
   )
