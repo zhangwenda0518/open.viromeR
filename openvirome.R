@@ -754,23 +754,39 @@ cat("Exporting CSV data...\n")
 write.csv(virome.df, paste0(p$output.path, p$analysis_name, '_virome_full.csv'), row.names = FALSE)
 write.csv(virx.df,   paste0(p$output.path, p$analysis_name, '_virome_summary.csv'), row.names = FALSE)
 
-# ---- Visual Theme (Bizard-style clean scientific theme) ---------------------
-# Unified across all plots — approximates ECharts Material Design aesthetic
-ov_colors <- c("Virus+" = "#e74c3c", "Virus-" = "#bdc3c7",
-               "Target" = "#3498db", "Control" = "#95a5a6",
-               "All" = "#2c3e50", "Family" = "#27ae60")
-theme_ov <- function(base_size = 12) {
-  theme_minimal(base_size = base_size) +
+# ---- Visual Theme (SCI publication style, Nature/Cell journal) -------------
+# Nature Communications style: white bg, minimal grid, journal typography
+ov_colors <- c(
+  "Virus+"    = "#D55E00",   # Nature-style orange-red
+  "Virus-"    = "#56B4E9",   # Nature-style sky blue
+  "Target"    = "#0072B2",   # deep blue
+  "Control"   = "#999999",   # gray
+  "All"       = "#000000",   # black
+  "Family"    = "#009E73",   # green
+  "Tissue"    = "#CC79A7",   # pink
+  "Disease"   = "#E69F00",   # gold
+  "Organism"  = "#56B4E9",   # sky blue
+  "Sex"       = "#F0E442"    # yellow
+)
+# SCI journal qualitative palette (colorblind-friendly, 10+ categories)
+sci_pal <- c("#0072B2","#D55E00","#009E73","#CC79A7","#E69F00","#56B4E9","#F0E442","#000000","#999999","#882255")
+theme_ov <- function(base_size = 11) {
+  theme_classic(base_size = base_size) +
     theme(
-      panel.grid.major = element_line(color = "#ecf0f1", linewidth = 0.3),
+      plot.title    = element_text(face = "bold", size = base_size + 2, color = "#000000"),
+      plot.subtitle = element_text(color = "#555555", size = base_size - 1),
+      axis.title   = element_text(color = "#000000", size = base_size),
+      axis.text    = element_text(color = "#333333", size = base_size - 1),
+      axis.line    = element_line(color = "#000000", linewidth = 0.4),
+      axis.ticks   = element_line(color = "#000000", linewidth = 0.3),
+      panel.grid.major = element_blank(),
       panel.grid.minor = element_blank(),
-      plot.title   = element_text(face = "bold", size = base_size + 2, color = "#2c3e50"),
-      plot.subtitle = element_text(color = "#7f8c8d", size = base_size - 1),
-      axis.title   = element_text(color = "#34495e", size = base_size),
-      axis.text    = element_text(color = "#7f8c8d", size = base_size - 1),
       legend.position = "bottom",
       legend.title = element_blank(),
-      plot.margin  = margin(15, 15, 15, 15)
+      legend.text  = element_text(size = base_size - 1, color = "#333333"),
+      strip.background = element_rect(fill = "#F2F2F2", color = NA),
+      strip.text   = element_text(face = "bold", size = base_size, color = "#000000"),
+      plot.margin  = margin(10, 10, 10, 10)
     )
 }
 # Standard PNG dimensions
@@ -810,6 +826,23 @@ if (isTRUE(api_skip_db)) {
   png(paste0(p$output.path, p$analysis_name, '_01_species_stacked.png'), width = OV_W, height = OV_H)
   print(plot.stacked); invisible(dev.off())
   write.csv(species_combined, paste0(p$output.path, p$analysis_name, '_01_species_combined.csv'), row.names = FALSE)
+
+  # ---- Run Technology Polar Bar (matching web frontend) ----------------------
+  if (exists("sra_table") && is.data.frame(sra_table) && nrow(sra_table) > 0) {
+    assay_df <- as.data.frame(table(sra_table$assay_type))
+    colnames(assay_df) <- c("Type", "Count")
+    assay_df$Pct <- round(100 * assay_df$Count / sum(assay_df$Count), 1)
+    p_polar <- ggplot(assay_df, aes(x = Type, y = Count, fill = Type)) +
+      geom_bar(stat = "identity", width = 0.8) +
+      coord_polar(theta = "x", start = 0) +
+      geom_text(aes(label = paste0(Count, "\n(", Pct, "%)")),
+                position = position_stack(vjust = 0.5), size = 3, color = "white", fontface = "bold") +
+      scale_fill_manual(values = rep(sci_pal, length.out = nrow(assay_df))) +
+      labs(title = "Run Technology (Assay Type)", subtitle = "Virus-positive runs", x = "", y = "") +
+      theme_ov() + theme(aspect.ratio = 1, axis.text.x = element_text(size = 9))
+    png(paste0(p$output.path, p$analysis_name, '_01_run_technology.png'), width = 600, height = 600)
+    print(p_polar); invisible(dev.off())
+  }
 
 } else {
   cat("Generating Run Statistics...\n")
@@ -1071,14 +1104,28 @@ V(vir.g)$pr <- degree(vir.g, normalized = TRUE)
 V(vir.g)$vrich <- 0
 V(vir.g)$vrank <- V(vir.g)$pr
 
-# Bipartite network plot — improved igraph styling
+# Bipartite network plot — colored by Virus Family (like web frontend)
 if (length(V(vir.g)) < 2000 & length(E(vir.g)) < 5000) {
+  # Assign colors to nodes: Runs = gray, sOTUs = color by family
+  fam_levels <- unique(na.omit(virome.df$tax_family))
+  fam_colors <- setNames(sci_pal[1:min(length(fam_levels), length(sci_pal))], fam_levels[1:min(length(fam_levels), length(sci_pal))])
+  node_cols <- rep("#CCCCCC", vcount(vir.g))
+  for (i in seq_len(vcount(vir.g))) {
+    if (V(vir.g)$type[i]) {
+      fam <- V(vir.g)$tax_family[i]
+      if (fam != "NA" && fam %in% names(fam_colors)) {
+        node_cols[i] <- fam_colors[fam]
+      } else {
+        node_cols[i] <- "#333333"
+      }
+    }
+  }
   png(paste0(p$output.path, p$analysis_name, '_05_virome_network.png'), width = OV_W, height = OV_W)
   set.seed(42)
   plot.igraph(vir.g, layout = layout_with_fr(vir.g),
-    vertex.size = ifelse(V(vir.g)$type, 6, 3),
+    vertex.size = ifelse(V(vir.g)$type, 7, 3),
     vertex.label = NA,
-    vertex.color = ifelse(V(vir.g)$type, "#e74c3c", "#3498db"),
+    vertex.color = node_cols,
     vertex.frame.color = NA,
     edge.color = "#ecf0f1", edge.width = 0.5,
     arrow.mode = "-", main = "Bipartite Run-sOTU Network")
@@ -1175,6 +1222,76 @@ if (!isTRUE(api_skip_db)) {
     V(palm.g)$vrank <- V(vir.g)$vrank[vir2palm]
     rm(vir2palm)
   }, error = function(e) cat("  Palmprint network failed:", conditionMessage(e), "\n"))
+}
+
+# ---- SECTION 5b: Ecology / Geography Analysis (Top Biomes & Countries) -----
+if (isTRUE(api_skip_db) && exists("eco_table") && is.data.frame(eco_table) && nrow(eco_table) > 0) {
+  cat("Generating Ecology/Geography plots...\n")
+
+  # Top Countries horizontal bar
+  countries <- sort(table(as.character(eco_table$country)), decreasing = TRUE)
+  if (length(countries) > 0) {
+    ctry_df <- data.frame(Country = names(head(countries, 12)),
+                          Count = as.integer(head(countries, 12)))
+    ctry_df$Country <- factor(ctry_df$Country, levels = rev(ctry_df$Country))
+    p_ctry <- ggplot(ctry_df, aes(Count, Country)) +
+      geom_bar(stat = "identity", fill = "#0072B2", width = 0.7) +
+      geom_text(aes(label = Count), hjust = -0.2, size = 3.5) +
+      labs(title = "Top Countries", x = "Number of records", y = "") +
+      theme_ov() + xlim(0, max(ctry_df$Count) * 1.15)
+    png(paste0(p$output.path, p$analysis_name, '_05_top_countries.png'), width = OV_W_SM, height = OV_H_SM)
+    print(p_ctry); invisible(dev.off())
+  }
+
+  # Top Biomes horizontal bar
+  biomes <- sort(table(as.character(eco_table$biome)), decreasing = TRUE)
+  if (length(biomes) > 0) {
+    bm_df <- data.frame(Biome = names(head(biomes, 10)),
+                        Count = as.integer(head(biomes, 10)))
+    bm_df$Biome <- factor(bm_df$Biome, levels = rev(bm_df$Biome))
+    p_bm <- ggplot(bm_df, aes(Count, Biome)) +
+      geom_bar(stat = "identity", fill = "#009E73", width = 0.7) +
+      geom_text(aes(label = Count), hjust = -0.2, size = 3.5) +
+      labs(title = "Top Biomes", x = "Number of records", y = "") +
+      theme_ov() + xlim(0, max(bm_df$Count) * 1.15)
+    png(paste0(p$output.path, p$analysis_name, '_05_top_biomes.png'), width = OV_W_SM, height = OV_H_SM)
+    print(p_bm); invisible(dev.off())
+  }
+}
+
+# ---- SECTION 5c: Host / Tissue Analysis ------------------------------------
+if (isTRUE(api_skip_db) && exists("host_table") && is.data.frame(host_table) && nrow(host_table) > 0) {
+  cat("Generating Host/Tissue plots...\n")
+
+  # Tissue horizontal bar
+  tissues <- sort(table(as.character(host_table$tissue)), decreasing = TRUE)
+  if (length(tissues) > 0) {
+    tis_df <- data.frame(Tissue = names(head(tissues, 12)),
+                         Count = as.integer(head(tissues, 12)))
+    tis_df$Tissue <- factor(tis_df$Tissue, levels = rev(tis_df$Tissue))
+    p_tis <- ggplot(tis_df, aes(Count, Tissue)) +
+      geom_bar(stat = "identity", fill = sci_pal[4], width = 0.7) +
+      geom_text(aes(label = Count), hjust = -0.2, size = 3.5) +
+      labs(title = "Tissue Distribution", x = "Number of records", y = "") +
+      theme_ov() + xlim(0, max(tis_df$Count) * 1.15)
+    png(paste0(p$output.path, p$analysis_name, '_05_tissue_distribution.png'), width = OV_W_SM, height = OV_H_SM)
+    print(p_tis); invisible(dev.off())
+  }
+
+  # Source text classification horizontal bar
+  texts <- sort(table(as.character(host_table$text)), decreasing = TRUE)
+  if (length(texts) > 0) {
+    txt_df <- data.frame(Source = names(head(texts, 12)),
+                         Count = as.integer(head(texts, 12)))
+    txt_df$Source <- factor(txt_df$Source, levels = rev(txt_df$Source))
+    p_txt <- ggplot(txt_df, aes(Count, Source)) +
+      geom_bar(stat = "identity", fill = sci_pal[5], width = 0.7) +
+      geom_text(aes(label = Count), hjust = -0.2, size = 3.5) +
+      labs(title = "Sample Source / Description", x = "Count", y = "") +
+      theme_ov() + xlim(0, max(txt_df$Count) * 1.15)
+    png(paste0(p$output.path, p$analysis_name, '_05_host_source.png'), width = OV_W_SM, height = OV_H_SM)
+    print(p_txt); invisible(dev.off())
+  }
 }
 
 # ---- SECTION 6: Data Tables ------------------------------------------------
@@ -1311,7 +1428,10 @@ section_map <- list(
   "_02_"  = "Virus Family Summary",
   "_03_"  = "sOTU Expression & Frequency",
   "_04_"  = "Geographical Distribution",
-  "_05_"  = "Network Analysis",
+  "_05_network"  = "Virome Network Analysis",
+  "_05_top"  = "Ecology / Geography",
+  "_05_tissue"  = "Host / Tissue Analysis",
+  "_05_host"  = "Host / Source Description",
   "_06_"  = "Data Tables"
 )
 
