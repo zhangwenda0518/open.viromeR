@@ -433,34 +433,27 @@ if (p$api_mode && p$search_type == "GENUS") {
   cat("  Using web API (openvirome.com database)\n")
 
   api_identifiers <- function(species, palmprint) {
+    body_json <- sprintf(
+      '{"filters":[{"filterType":"label","filterKey":"organism","filterValue":"%s","groupByKey":"organism"}],"palmprintOnly":%s}',
+      species, ifelse(palmprint, "true", "false"))
     resp <- httr::POST(paste0(API_BASE, "/identifiers"),
       httr::add_headers("Content-Type" = "application/json"),
-      body = jsonlite::toJSON(list(
-        filters = list(list(filterType = "label", filterKey = "organism",
-          filterValue = species, groupByKey = "organism")),
-        palmprintOnly = palmprint
-      ), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
+      body = body_json, encode = "raw", httr::timeout(30))
     if (httr::status_code(resp) != 200) return(list(run = list(single = list(), totalCount = 0)))
     parse_api_response(resp, simplify = FALSE)
   }
 
-  api_results_call <- function(ids, table, cols, batch_size = 50) {
+  api_results_call <- function(ids, table, cols) {
     if (length(ids) == 0) return(data.frame())
-    all_parts <- list()
-    for (start in seq(1, length(ids), batch_size)) {
-      batch <- ids[start:min(start + batch_size - 1, length(ids))]
-      resp <- httr::POST(paste0(API_BASE, "/results"),
-        httr::add_headers("Content-Type" = "application/json"),
-        body = jsonlite::toJSON(list(ids = batch, idColumn = "run_id",
-          table = table, columns = cols, pageStart = 0, pageEnd = 100000),
-          auto_unbox = TRUE), encode = "raw", httr::timeout(60))
-      if (httr::status_code(resp) == 200) {
-        part <- parse_api_response(resp)
-        if (is.data.frame(part) && nrow(part) > 0) all_parts[[length(all_parts)+1]] <- part
-      }
-    }
-    if (length(all_parts) == 0) return(data.frame())
-    do.call(rbind, all_parts)
+    # Build JSON body manually to avoid auto_unbox issues with vector ids
+    ids_json <- paste0('[', paste(sprintf('"%s"', ids), collapse = ','), ']')
+    body_json <- sprintf('{"ids":%s,"idColumn":"run_id","table":"%s","columns":"%s","pageStart":0,"pageEnd":100000}',
+                         ids_json, table, cols)
+    resp <- httr::POST(paste0(API_BASE, "/results"),
+      httr::add_headers("Content-Type" = "application/json"),
+      body = body_json, encode = "raw", httr::timeout(60))
+    if (httr::status_code(resp) != 200) return(data.frame())
+    parse_api_response(resp)
   }
 
   # Step 1: /counts with searchString + pageEnd=100000 (force materialized view)
