@@ -568,6 +568,7 @@ if (p$api_mode && p$search_type == "GENUS") {
   if ("gb_pid" %in% colnames(virome.df)) virome.df$gb_pid <- as.numeric(virome.df$gb_pid)
 
   # ---- Fetch SRA / Host / Ecology tables (for downstream plots) ------------
+  sra_table <- NULL; host_table <- NULL; eco_table <- NULL
   biosample_ids <- unique(na.omit({
     if ("biosample" %in% colnames(virome.df)) virome.df$biosample else virome.df$bio_sample
   }))
@@ -583,7 +584,7 @@ if (p$api_mode && p$search_type == "GENUS") {
       cat(sprintf("  SRA: %d runs\n", nrow(sra_table)))
       write.csv(sra_table, paste0(p$output.path, "open-virome-Sra.csv"), row.names = FALSE)
     }
-  }, error = function(e) NULL)
+  }, error = function(e) cat("  SRA fetch failed:", conditionMessage(e), "\n"))
   if (length(biosample_ids) > 0) {
     tryCatch({
       host_tmp <- httr::POST(paste0(API_BASE, "/results"),
@@ -596,6 +597,8 @@ if (p$api_mode && p$search_type == "GENUS") {
         cat(sprintf("  Host: %d records\n", nrow(host_table)))
         write.csv(host_table, paste0(p$output.path, "open-virome-Host.csv"), row.names = FALSE)
       }
+    }, error = function(e) cat("  Host fetch failed:", conditionMessage(e), "\n"))
+    tryCatch({
       eco_tmp <- httr::POST(paste0(API_BASE, "/results"),
         httr::add_headers("Content-Type" = "application/json"),
         body = jsonlite::toJSON(list(ids = as.list(biosample_ids[1:min(500, length(biosample_ids))]),
@@ -607,7 +610,7 @@ if (p$api_mode && p$search_type == "GENUS") {
         cat(sprintf("  Ecology: %d records\n", nrow(eco_table)))
         write.csv(eco_table, paste0(p$output.path, "open-virome-Ecology.csv"), row.names = FALSE)
       }
-    }, error = function(e) NULL)
+    }, error = function(e) cat("  Ecology fetch failed:", conditionMessage(e), "\n"))
   }
 
   # Species breakdown (API mode — one concise table)
@@ -1500,24 +1503,31 @@ if (use_llm && nrow(virome.df) > 0) {
   bp_context <- if (length(bp_ids) > 0) paste(sprintf("BioProjects: %s", paste(bp_ids, collapse = ", "))) else ""
   bp_limit_note <- "**Do not list more than 5 bioprojects in a single reference**."
 
-  # ---- 1. SRA / BioProject Summary (always runs, even without BioProject IDs) ----
+  # ---- 1. SRA / BioProject Summary ----
   cat("  [LLM] 1/5 SRA / Data summary...\n")
   sra_desc <- if (exists("sra_table") && is.data.frame(sra_table)) {
-    at <- sort(table(sra_table$assay_type), decreasing = TRUE)
-    sprintf("Assay types: %s. Total Gbp: %.1f. Instruments: %s.",
-            paste(names(at), at, sep = "=", collapse = ", "),
-            sum(as.numeric(sra_table$mbases), na.rm = TRUE)/1e9,
-            paste(names(sort(table(sra_table$instrument), decreasing = TRUE)[1:3]), collapse = ", "))
-  } else ""
+    at <- as.data.frame(table(sra_table$assay_type)); colnames(at) <- c("type","n")
+    inst <- as.data.frame(table(sra_table$instrument)); colnames(inst) <- c("inst","n")
+    sprintf("Total Gbp: %.1f. Assay types: %s. Instruments: %s. Bioprojects: %s.",
+            sum(as.numeric(sra_table$mbases), na.rm=TRUE)/1e9,
+            paste0(at$type,"(",at$n,")", collapse=", "),
+            paste0(head(inst$inst[inst$n>0],5),"(",head(inst$n[inst$n>0],5),")", collapse=", "),
+            bp_context)
+  } else sprintf("Total runs: %d. Virus-positive: %d. Virus families: %d.",
+                  length(unique(all.runs)), length(unique(virome.runs)),
+                  length(unique(virome.df$tax_family)))
   llm_bioproject <- ds_chat(
-    "You are a bioinformatics research assistant. Provide a concise one-paragraph summary of the SRA sequencing run metadata for this plant virome study. Cover: total runs, assay types, sequencing centers, total Gbp, and the BioProjects involved. Use ** for key terms. ONLY use provided data.",
-    sprintf("Search genus: %s\nTotal runs: %d\nVirus-positive: %d\nVirus families: %d\n%s\n%s",
-            p$genus_match_term, length(unique(all.runs)), length(unique(virome.runs)),
-            length(unique(virome.df$tax_family)), sra_desc, bp_context))
-  if (nchar(llm_bioproject) < 10) {
-    llm_bioproject <- sprintf("SRA summary: %d total runs, %d virus-positive, %d virus families detected in genus %s.",
-                              length(unique(all.runs)), length(unique(virome.runs)),
-                              length(unique(virome.df$tax_family)), p$genus_match_term)
+    paste0("You are analyzing SRA sequencing metadata for the plant genus ", p$genus_match_term,
+           ". Write ONE paragraph summarizing the dataset. Cover: sequencing depth (Gbp), ",
+           "main assay types used (RNA-Seq, WGS etc), key instruments, and which BioProjects ",
+           "contributed most data. Highlight the scale of the study. Use ** for key terms. ",
+           "ONLY use the data provided. No external knowledge."),
+    sra_desc)
+  if (nchar(llm_bioproject) < 20) {
+    llm_bioproject <- sprintf("This study analyzed %d SRA runs from genus %s, with %d virus-positive runs spanning %d virus families. Total sequencing depth: %.1f Gbp.",
+      length(unique(all.runs)), p$genus_match_term, length(unique(virome.runs)),
+      length(unique(virome.df$tax_family)),
+      if (exists("sra_table")) sum(as.numeric(sra_table$mbases),na.rm=TRUE)/1e9 else 0)
   }
   cat(sprintf("  [LLM] SRA/BioProject: %d chars\n", nchar(llm_bioproject)))
 
