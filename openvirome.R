@@ -1305,61 +1305,268 @@ html_lines <- c(
   '</table>', '</div>', ''
 )
 
-# ---- LLM-Powered Analysis Summary ----
-llm_summary  <- ""; llm_family <- ""; llm_network <- ""
-llm_sra <- ""; llm_host <- ""; llm_ecology <- ""
+# ---- LLM-Powered Analysis Summary (matching web-style prompts) -------------
+llm_bioproject <- ""; llm_virome <- ""; llm_ecology <- ""; llm_host <- ""; llm_network <- ""
 
 if (use_llm && nrow(virome.df) > 0) {
   cat("Generating LLM analysis summaries...\n")
 
-  build_virome_json <- function() {
-    top_fam <- as.data.frame(sort(table(as.character(virome.df$tax_family)), decreasing = TRUE)[1:10])
-    colnames(top_fam) <- c("family", "count")
-    top_sotu <- head(vrank.df, 15)
-    top_sotu$sotu_label <- paste0(top_sotu$sotu, " (", top_sotu$nruns, " runs)")
-    comp_summary <- cs.df[, c("component", "n_sotu", "n_run", "n_edge")]
-    jsonlite::toJSON(list(
-      genus = p$genus_match_term,
-      total_runs_all = length(unique(all.runs)),
-      total_runs_virus = length(unique(virome.runs)),
-      total_sotu = length(unique(virome.df$sotu)),
-      total_families = length(unique(virome.df$tax_family)),
-      top_families = top_fam,
-      top_sotus = top_sotu[, c("sotu_label", "vrank")],
-      virome_components = comp_summary
-    ), auto_unbox = TRUE, pretty = TRUE)
+  # Helper: extract bioproject IDs from the data
+  get_bioproject_ids <- function() {
+    if (exists("sra_table") && is.data.frame(sra_table) && "bioproject" %in% colnames(sra_table)) {
+      bp <- sort(table(as.character(sra_table$bioproject)), decreasing = TRUE)
+      return(names(bp))
+    }
+    if ("bio_project" %in% colnames(virome.df)) {
+      bp <- sort(table(as.character(virome.df$bio_project)), decreasing = TRUE)
+      return(names(bp[bp != ""]))
+    }
+    return(character(0))
+  }
+  bp_ids <- get_bioproject_ids()
+  bp_context <- if (length(bp_ids) > 0)
+    paste(sprintf("BioProject IDs in this analysis: %s", paste(bp_ids, collapse = ", ")))
+    else ""
+  bp_limit_note <- "**Do not list more than 5 bioprojects in a single reference**. Instead, list the top 5 most relevant bioprojects and add \"+more\" to indicate that there are more."
+
+  # ---- 1. BioProject / SRA Summarization (matching getBioProjectsSummarizationPrompt) ----
+  if (length(bp_ids) > 0) {
+    cat("  [LLM] 1/5 BioProject summary...\n")
+    llm_bioproject <- ds_chat(
+      paste0(
+        "---Role---\n\n",
+        "You are a helpful bioinformatics research assistant being used to ",
+        "summarize research projects for display on a wikipedia-like page.\n\n",
+        "---Goal---\n\n",
+        "Follow the instructions to summarize BioProjects:\n",
+        "1. Provide a succinct overview of the high-level ideas covered by the ",
+        "bioproject titles, names, and descriptions, no longer than a paragraph.\n",
+        "2. For each overarching topic in the summarization, cite all relevant ",
+        "bioproject ID(s).\n",
+        "3. DO NOT reference any bioprojects that aren't given in the list.\n",
+        "4. ONLY use the information provided in the bioprojects to generate ",
+        "the summary.\n",
+        "5. Avoid using any external information or knowledge.\n\n",
+        "---Target response length and format---\n\n",
+        "One paragraph\n\n",
+        "Use standard markdown delimiter ** to surround/highlight important ",
+        "topics or keywords in the bioprojects, DO NOT ADD THEM TO BIOPROJECT IDs.\n\n",
+        "DO NOT use any other delimiter in your summary, unless it is part of ",
+        "the bioprojects title/description.\n",
+        bp_limit_note, "\n\n---\n"
+      ),
+      sprintf("BioProjects analyzed: %s\n\nAdditional context:\nSearch genus: %s\nTotal runs: %d\nVirus-positive runs: %d\nUnique sOTUs: %d\nVirus families: %d",
+              bp_context, p$genus_match_term, length(unique(all.runs)),
+              length(unique(virome.runs)), length(unique(virome.df$sotu)),
+              length(unique(virome.df$tax_family))))
+    cat(sprintf("  [LLM] BioProject: %d chars\n", nchar(llm_bioproject)))
   }
 
-  llm_summary <- ds_chat(
-    paste0("---Role---\n\nYou are a bioinformatics research assistant summarizing virome data for a research paper.\n\n",
-           "---Goal---\n1. Factual overview using only provided data.\n2. Highlight patterns, trends.\n",
-           "3. End with higher-level insight.\n4. Avoid external knowledge.\n\n---Target---\nOne paragraph. Use ** for keywords."),
-    build_virome_json())
+  # ---- 2. Virome Summarization (matching getViromeSummarizationPrompt) ----
+  cat("  [LLM] 2/5 Virome summary...\n")
+  virome_data <- list(
+    genus = p$genus_match_term,
+    total_runs_all = length(unique(all.runs)),
+    total_runs_virus = length(unique(virome.runs)),
+    total_sotu = length(unique(virome.df$sotu)),
+    total_families = length(unique(virome.df$tax_family)),
+    top_families = as.data.frame(sort(table(as.character(virome.df$tax_family)), decreasing = TRUE)[1:10]),
+    top_sotus = head(vrank.df[, c("sotu", "nruns", "vrank")], 15),
+    components = as.list(cs.df[1:min(5, nrow(cs.df)), c("component", "n_sotu", "n_run", "n_edge")]),
+    bioprojects = bp_ids
+  )
+  virome_json <- jsonlite::toJSON(virome_data, auto_unbox = TRUE, pretty = TRUE)
 
-  llm_family <- ds_chat(
-    paste0("---Role---\n\nYou are a plant virologist interpreting virus family distributions.\n\n",
-           "---Goal---\nFor each top family: expected in plants? genome type? relevance?\n",
-           "---Target---\nOne paragraph per family. Use ** for family names."),
-    build_virome_json())
+  llm_virome <- ds_chat(
+    paste0(
+      "---Role---\n\n",
+      "You are a helpful bioinformatics research assistant being used to ",
+      "summarize virome data for a research paper.\n\n",
+      "---Goal---\n\n",
+      "Follow the instructions to summarize virome data:\n",
+      "1. Start with a concise, factual overview of the virome data based only ",
+      "on the provided bioprojects.\n",
+      "2. Progressively incorporate inferred insights by identifying patterns, ",
+      "trends, or broader implications of the virome data while staying within ",
+      "the given bioproject context.\n",
+      "3. For each overarching topic in the summarization, cite all relevant ",
+      "bioproject ID(s).\n",
+      "4. DO NOT reference any bioprojects that aren't given in the list.\n",
+      "5. ONLY use the information provided in the virome data and bioproject ",
+      "data to generate the summary.\n",
+      "6. Avoid using any external information or knowledge.\n",
+      "7. Focus on virome data and only use the provided bioproject context to ",
+      "guide the summarization and insights.\n\n",
+      "--- Inference Guidelines ---\n\n",
+      "Start by reporting observed data directly.\n\n",
+      "As the summary progresses, highlight trends, correlations, or significant ",
+      "findings that emerge.\n\n",
+      "End with a higher-level insight that connects findings to broader ",
+      "implications in virology, ecology, or host-pathogen interactions, while ",
+      "staying grounded in the provided data.\n\n",
+      "---Target response length and format---\n\n",
+      "One paragraph\n\n",
+      "Use standard markdown delimiter ** to surround/highlight important topics ",
+      "or keywords in the virome data, DO NOT ADD THEM TO BIOPROJECT IDs.\n\n",
+      "DO NOT use any other delimiter in your summary, unless it is part of ",
+      "the virome data.\n",
+      bp_limit_note, "\n\n---\n"
+    ), virome_json)
+  cat(sprintf("  [LLM] Virome: %d chars\n", nchar(llm_virome)))
 
+  # ---- 3. Ecology / Geography Summarization (matching getEcologySummarizationPrompt) ----
+  if (exists("eco_table") && is.data.frame(eco_table) && nrow(eco_table) > 0) {
+    cat("  [LLM] 3/5 Ecology summary...\n")
+    eco_data <- list(
+      total_records = nrow(eco_table),
+      countries = as.list(sort(table(as.character(eco_table$country)), decreasing = TRUE)[1:10]),
+      biomes = as.list(sort(table(as.character(eco_table$biome)), decreasing = TRUE)[1:8]),
+      bioprojects = bp_ids
+    )
+    eco_json <- jsonlite::toJSON(eco_data, auto_unbox = TRUE, pretty = TRUE)
+    llm_ecology <- ds_chat(
+      paste0(
+        "---Role---\n\n",
+        "You are a helpful bioinformatics research assistant being used to ",
+        "summarize geographical data for a research paper.\n\n",
+        "---Goal---\n\n",
+        "Follow the instructions to summarize ecological data:\n",
+        "1. Start with a concise, factual overview of the geographical data ",
+        "based only on the provided bioprojects.\n",
+        "2. Progressively incorporate inferred insights by identifying patterns, ",
+        "trends, or broader implications of the geography data while staying ",
+        "within the given bioproject context.\n",
+        "3. For each overarching topic in the summarization, cite all relevant ",
+        "bioproject ID(s).\n",
+        "4. DO NOT reference any bioprojects that aren't given in the list.\n",
+        "5. DO NOT reference biosamples (items start with 'SAMN'), only reference ",
+        "bioprojects (items start with 'PRJNA').\n",
+        "6. ONLY use the information provided in the geography data and bioproject ",
+        "data to generate the summary.\n",
+        "7. Avoid using any external information or knowledge.\n",
+        "8. Focus on geographical data and making connections based on the ",
+        "geographical data to the provided bioproject context to guide the ",
+        "summarization and insights.\n",
+        "9. Try to discuss any geological patterns or trends among the provided data.\n",
+        "10. Avoid mentioning summarizations of bioprojects or virome data.\n",
+        "11. When naming locations, avoid using latitude, longitude and elevation, ",
+        "instead use the location name.\n\n",
+        "--- Inference Guidelines ---\n\n",
+        "Start by reporting observed data directly.\n\n",
+        "As the summary progresses, highlight trends, correlations, or significant ",
+        "findings that emerge.\n\n",
+        "End with a higher-level insight that connects findings to broader ",
+        "implications in virology, geological, or host-pathogen interactions, ",
+        "while staying grounded in the provided data.\n\n",
+        "---Target response length and format---\n\n",
+        "One paragraph\n\n",
+        bp_limit_note, "\n\n---\n"
+      ), eco_json)
+    cat(sprintf("  [LLM] Ecology: %d chars\n", nchar(llm_ecology)))
+  }
+
+  # ---- 4. Host / Tissue Summarization (matching getHostSummarizationPrompt) ----
+  if (exists("host_table") && is.data.frame(host_table) && nrow(host_table) > 0) {
+    cat("  [LLM] 4/5 Host summary...\n")
+    host_data <- list(
+      total_biosamples = nrow(host_table),
+      tissues = as.list(sort(table(as.character(host_table$tissue)), decreasing = TRUE)[1:10]),
+      bioprojects = bp_ids
+    )
+    host_json <- jsonlite::toJSON(host_data, auto_unbox = TRUE, pretty = TRUE)
+    llm_host <- ds_chat(
+      paste0(
+        "---Role---\n\n",
+        "You are a helpful bioinformatics research assistant being used to ",
+        "summarize host data for a research paper.\n\n",
+        "---Goal---\n\n",
+        "Follow the instructions to summarize host data:\n",
+        "1. Start with a concise, factual overview of the host/tissue data based ",
+        "only on the provided bioprojects.\n",
+        "2. Progressively incorporate inferred insights by identifying patterns, ",
+        "trends, or broader implications of the host/tissue data while staying ",
+        "within the given bioproject context.\n",
+        "3. For each overarching topic in the summarization, cite all relevant ",
+        "bioproject ID(s).\n",
+        "4. DO NOT reference any bioprojects that aren't given in the list.\n",
+        "5. ONLY use the information provided in the host/tissue data and bioproject ",
+        "data to generate the summary.\n",
+        "6. Avoid using any external information or knowledge.\n",
+        "7. Focus on host/tissue and only use the provided bioproject context to ",
+        "guide the summarization and insights.\n\n",
+        "--- Inference Guidelines ---\n\n",
+        "Start by reporting observed data directly.\n\n",
+        "As the summary progresses, highlight trends, correlations, or significant ",
+        "findings that emerge.\n\n",
+        "End with a higher-level insight that connects findings to broader ",
+        "implications in virology, ecology, or host-pathogen interactions, while ",
+        "staying grounded in the provided data.\n\n",
+        "---Target response length and format---\n\n",
+        "One paragraph\n\n",
+        "Use standard markdown delimiter ** to surround/highlight important topics ",
+        "or keywords in the host data, DO NOT ADD THEM TO BIOPROJECT IDs.\n\n",
+        "DO NOT use any other delimiter in your summary, unless it is part of ",
+        "the host data.\n",
+        bp_limit_note, "\n\n---\n"
+      ), host_json)
+    cat(sprintf("  [LLM] Host: %d chars\n", nchar(llm_host)))
+  }
+
+  # ---- 5. Network Analysis Interpretation ----
+  cat("  [LLM] 5/5 Network summary...\n")
+  net_data <- list(
+    total_nodes = length(V(vir.g)),
+    total_edges = length(E(vir.g)),
+    n_components = nrow(cs.df),
+    largest_component = if (nrow(cs.df) > 0) as.list(cs.df[1, c("n_sotu", "n_run", "n_edge")]) else NULL,
+    top_sotus = head(vrank.df[, c("sotu", "nruns", "vrank")], 10)
+  )
+  net_json <- jsonlite::toJSON(net_data, auto_unbox = TRUE, pretty = TRUE)
   llm_network <- ds_chat(
-    paste0("---Role---\n\nYou are a bioinformatics specialist interpreting viral network analysis.\n\n",
-           "---Goal---\n1. Component structure → virus-host associations.\n2. High vrank sOTU significance.\n",
-           "---Target---\n1-2 paragraphs."),
-    build_virome_json())
+    paste0(
+      "---Role---\n\n",
+      "You are a bioinformatics specialist interpreting viral network analysis ",
+      "results from a plant virome study.\n\n",
+      "---Goal---\n\n",
+      "Interpret the bipartite Run-sOTU network:\n",
+      "1. Explain what the component structure reveals about virus-host ",
+      "associations and community organization.\n",
+      "2. Describe what high vrank sOTUs mean biologically — these are sOTUs ",
+      "with high network centrality (PageRank) weighted by virus enrichment.\n",
+      "3. Connect findings to the bioproject context where possible.\n",
+      "4. Cite relevant BioProject IDs.\n",
+      "5. ONLY use the information provided. Avoid external knowledge.\n\n",
+      "---Target response length and format---\n\n",
+      "One to two paragraphs.\n",
+      bp_limit_note, "\n\n---\n"
+    ), net_json)
+  cat(sprintf("  [LLM] Network: %d chars\n", nchar(llm_network)))
 }
 
-if (nchar(llm_summary) > 0) {
+# ---- Insert LLM summaries into HTML ----
+if (nchar(llm_bioproject) > 0) {
+  html_lines <- c(html_lines,
+    '<div class="section" style="border-left: 4px solid #9b59b6;">',
+    '<h2>AI: BioProject / SRA Overview</h2>',
+    sprintf('<div class="llm">%s</div>', gsub("\n", "<br>", llm_bioproject)), '</div>', '')
+}
+if (nchar(llm_virome) > 0) {
   html_lines <- c(html_lines,
     '<div class="section" style="border-left: 4px solid #3498db;">',
-    '<h2>AI: Analysis Overview</h2>',
-    sprintf('<div class="llm">%s</div>', gsub("\n", "<br>", llm_summary)), '</div>', '')
+    '<h2>AI: Virome Analysis</h2>',
+    sprintf('<div class="llm">%s</div>', gsub("\n", "<br>", llm_virome)), '</div>', '')
 }
-if (nchar(llm_family) > 0) {
+if (nchar(llm_ecology) > 0) {
   html_lines <- c(html_lines,
-    '<div class="section" style="border-left: 4px solid #27ae60;">',
-    '<h2>AI: Virus Family Interpretation</h2>',
-    sprintf('<div class="llm">%s</div>', gsub("\n", "<br>", llm_family)), '</div>', '')
+    '<div class="section" style="border-left: 4px solid #1abc9c;">',
+    '<h2>AI: Ecology / Geography</h2>',
+    sprintf('<div class="llm">%s</div>', gsub("\n", "<br>", llm_ecology)), '</div>', '')
+}
+if (nchar(llm_host) > 0) {
+  html_lines <- c(html_lines,
+    '<div class="section" style="border-left: 4px solid #e74c3c;">',
+    '<h2>AI: Host / Tissue</h2>',
+    sprintf('<div class="llm">%s</div>', gsub("\n", "<br>", llm_host)), '</div>', '')
 }
 if (nchar(llm_network) > 0) {
   html_lines <- c(html_lines,
