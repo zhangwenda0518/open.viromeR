@@ -445,13 +445,13 @@ if (p$api_mode && p$search_type == "GENUS") {
 
   api_results_call <- function(ids, table, cols) {
     if (length(ids) == 0) return(data.frame())
-    # Build JSON body manually to avoid auto_unbox issues with vector ids
-    ids_json <- paste0('[', paste(sprintf('"%s"', ids), collapse = ','), ']')
-    body_json <- sprintf('{"ids":%s,"idColumn":"run_id","table":"%s","columns":"%s","pageStart":0,"pageEnd":100000}',
-                         ids_json, table, cols)
+    body <- list(ids = as.list(ids), idColumn = "run_id",
+                 table = table, columns = cols,
+                 pageStart = 0, pageEnd = 100000)
     resp <- httr::POST(paste0(API_BASE, "/results"),
       httr::add_headers("Content-Type" = "application/json"),
-      body = body_json, encode = "raw", httr::timeout(60))
+      body = jsonlite::toJSON(body, auto_unbox = TRUE), encode = "raw",
+      httr::timeout(60))
     if (httr::status_code(resp) != 200) return(data.frame())
     parse_api_response(resp)
   }
@@ -661,7 +661,34 @@ if ("taxid" %in% colnames(virome.df)) {
 }
 
 # Melt virome data.frame, group by sOTU
-virx.df <- melt.virome(virome.df)
+if (isTRUE(api_skip_db) || !requireNamespace("open.viromeR", quietly = TRUE)) {
+  # Local implementation for API mode
+  if ("sotu" %in% colnames(virome.df) && "sotu" != "unknown") {
+    virx.df <- dplyr::count(virome.df, sotu, sort = TRUE)
+    meta_cols <- intersect(c("sotu", "nickname", "gb_acc", "gb_pid", "gb_eval", "tax_species", "tax_family"),
+                           colnames(virome.df))
+    meta <- virome.df[!duplicated(virome.df$sotu), meta_cols]
+    virx.df <- merge(virx.df, meta, by = "sotu")
+    if ("node_coverage" %in% colnames(virome.df)) {
+      virx.df$mean_coverage <- sapply(virx.df$sotu, function(s) {
+        mean(virome.df$node_coverage[virome.df$sotu == s], na.rm = TRUE)
+      })
+    } else {
+      virx.df$mean_coverage <- 0
+      virx.df$gb_pid <- if ("gb_pid" %in% colnames(virx.df)) as.numeric(virx.df$gb_pid) else 0
+      virx.df$max_coverage <- 0
+    }
+    virx.df$max_coverage <- 0
+  } else {
+    # Fallback: create minimal virx.df from species counts
+    virx.df <- data.frame(sotu = "no_palmprint_data", n = nrow(virome.df),
+      nickname = "", gb_acc = "", gb_pid = 0, gb_eval = 0,
+      tax_species = "", tax_family = "", mean_coverage = 0, max_coverage = 0,
+      stringsAsFactors = FALSE)
+  }
+} else {
+  virx.df <- melt.virome(virome.df)
+}
 
 cat(sprintf("  Virus-positive runs: %d, unique sOTUs: %d\n",
             length(unique(virome.runs)), nrow(virx.df)))
