@@ -1083,7 +1083,7 @@ dlim    <- range(with(cs.df, c(D_sotu, D_run)))
 
 plot.comp1 <- ggplot(cs.df, aes(n_nodes, n_edge, label = component, fill = component)) +
   geom_abline(slope = 1, intercept = 0, color = 'gray50') +
-  geom_label(colour = "white", fontface = "bold") +
+  geom_text(colour = "white", fontface = "bold") +
   theme_bw() + theme(legend.position = "none") + scale_x_log10() + scale_y_log10() +
   scale_fill_manual(values = turbo(length(cs.df$component))) +
   coord_cartesian(xlim = netlim, ylim = netlim) +
@@ -1091,7 +1091,7 @@ plot.comp1 <- ggplot(cs.df, aes(n_nodes, n_edge, label = component, fill = compo
 
 plot.comp2 <- ggplot(cs.df, aes(n_run, n_sotu, label = component, size = log10(n_edge), fill = component)) +
   geom_abline(slope = 1, intercept = 0, color = 'gray50') +
-  geom_label(colour = "white", fontface = "bold") +
+  geom_text(colour = "white", fontface = "bold") +
   theme_bw() + theme(legend.position = "none") +
   scale_fill_manual(values = turbo(length(cs.df$component))) +
   coord_cartesian(xlim = nodelim, ylim = nodelim) +
@@ -1099,7 +1099,7 @@ plot.comp2 <- ggplot(cs.df, aes(n_run, n_sotu, label = component, size = log10(n
 
 plot.comp3 <- ggplot(cs.df, aes(n_sotu, Vrich, label = component, size = log10(n_edge), fill = component)) +
   geom_abline(slope = 1, intercept = 0, color = 'gray50') +
-  geom_label(colour = "white", fontface = "bold") +
+  geom_text(colour = "white", fontface = "bold") +
   theme_bw() + theme(legend.position = "none") +
   scale_fill_manual(values = turbo(length(cs.df$component))) +
   coord_cartesian(xlim = nodelim, ylim = nodelim) +
@@ -1107,7 +1107,7 @@ plot.comp3 <- ggplot(cs.df, aes(n_sotu, Vrich, label = component, size = log10(n
 
 plot.comp4 <- ggplot(cs.df, aes(D_sotu, D_run, label = component, size = log10(n_edge), fill = component)) +
   geom_abline(slope = 1, intercept = 0, color = 'gray50') +
-  geom_label(colour = "white", fontface = "bold") +
+  geom_text(colour = "white", fontface = "bold") +
   theme_bw() + theme(legend.position = "none") +
   scale_fill_manual(values = turbo(length(cs.df$component))) +
   coord_cartesian(xlim = dlim, ylim = dlim) +
@@ -1130,7 +1130,7 @@ rm(i.sotu)
 vrank.df <- vrank.df[order(vrank.df$vrank, decreasing = TRUE), ]
 
 plot.vrank <- ggplot(vrank.df, aes(pr, vrich, fill = vrank, label = sotu)) +
-  geom_label(colour = "white", fontface = "bold") +
+  geom_text(colour = "white", fontface = "bold") +
   viridis::scale_fill_viridis(option = "plasma") + theme_bw() +
   xlab('Page Rank (sOTU)') + ylab('V-enrichment (sOTU)')
 png(paste0(p$output.path, p$analysis_name, '_05_sotu_vrank.png'), width = 1000, height = 800)
