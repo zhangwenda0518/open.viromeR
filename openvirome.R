@@ -455,17 +455,20 @@ if (p$api_mode && p$search_type == "GENUS") {
     parse_api_response(resp)
   }
 
-  # Step 1: /counts → species list (all runs)
+  # Step 1: /counts with searchString + pageEnd=100000 (force materialized view)
   resp_counts <- httr::POST(paste0(API_BASE, "/counts"),
     httr::add_headers("Content-Type" = "application/json"),
     body = jsonlite::toJSON(list(
-      filters = list(list(filterType = "label", filterKey = "organism",
-        filterValue = p$genus_match_term, groupByKey = "organism")),
-      groupBy = "organism", palmprintOnly = FALSE, pageEnd = 100
+      groupBy = "organism",
+      searchString = p$genus_match_term,
+      palmprintOnly = FALSE,
+      pageEnd = 100000,
+      sortByColumn = "count",
+      sortByDirection = "desc"
     ), auto_unbox = TRUE), encode = "raw", httr::timeout(30))
   if (httr::status_code(resp_counts) != 200) stop("API /counts failed")
   api_counts <- parse_api_response(resp_counts)
-  cat(sprintf("  Found %d species matching '%s'\n", nrow(api_counts), p$genus_match_term))
+  cat(sprintf("  searchString returned %d organism values\n", nrow(api_counts)))
 
   # Step 2: For EACH species, get all-run + virus-run identifiers
   all_run_ids <- character(0)
