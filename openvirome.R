@@ -1207,10 +1207,15 @@ dt_summary <- cbind(
     rownames = FALSE, filter = "top", escape = FALSE,
     options = list(ordering = TRUE, order = list(list(2, 'desc')), pageLength = 20, scrollX = TRUE))
 
+# Save DT widgets as standalone HTML AND embeddable divs for the main report
 htmlwidgets::saveWidget(dt_full,
   paste0(p$output.path, p$analysis_name, '_06_full_table.html'), selfcontained = TRUE)
 htmlwidgets::saveWidget(dt_summary,
   paste0(p$output.path, p$analysis_name, '_06_summary_table.html'), selfcontained = TRUE)
+
+# Generate embeddable HTML snippets for the main report
+dt_full_html  <- paste(capture.output(print(dt_full)), collapse = "\n")
+dt_summary_html <- paste(capture.output(print(dt_summary)), collapse = "\n")
 
 # ---- Save Workspace --------------------------------------------------------
 cat("Saving workspace...\n")
@@ -1608,10 +1613,14 @@ for (sn in names(section_map)) {
   }
   if (grepl("_06_", sn, fixed = TRUE)) {
     html_lines <- c(html_lines,
-      '<div class="figure"><ul>',
-      sprintf('  <li><a href="%s_06_full_table.html" target="_blank">Full Virome Table</a></li>', p$analysis_name),
-      sprintf('  <li><a href="%s_06_summary_table.html" target="_blank">Summary Virome Table</a></li>', p$analysis_name),
-      '</ul></div>')
+      '<div class="figure">',
+      '<div class="figure-title">Full Virome Table</div>',
+      if (exists("dt_full_html")) dt_full_html else "",
+      '</div>',
+      '<div class="figure">',
+      '<div class="figure-title">Summary Virome Table</div>',
+      if (exists("dt_summary_html")) dt_summary_html else "",
+      '</div>')
   }
   html_lines <- c(html_lines, '</div>', '')
 }
