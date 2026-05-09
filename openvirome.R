@@ -754,10 +754,31 @@ cat("Exporting CSV data...\n")
 write.csv(virome.df, paste0(p$output.path, p$analysis_name, '_virome_full.csv'), row.names = FALSE)
 write.csv(virx.df,   paste0(p$output.path, p$analysis_name, '_virome_summary.csv'), row.names = FALSE)
 
+# ---- Visual Theme (Bizard-style clean scientific theme) ---------------------
+# Unified across all plots — approximates ECharts Material Design aesthetic
+ov_colors <- c("Virus+" = "#e74c3c", "Virus-" = "#bdc3c7",
+               "Target" = "#3498db", "Control" = "#95a5a6",
+               "All" = "#2c3e50", "Family" = "#27ae60")
+theme_ov <- function(base_size = 12) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      panel.grid.major = element_line(color = "#ecf0f1", linewidth = 0.3),
+      panel.grid.minor = element_blank(),
+      plot.title   = element_text(face = "bold", size = base_size + 2, color = "#2c3e50"),
+      plot.subtitle = element_text(color = "#7f8c8d", size = base_size - 1),
+      axis.title   = element_text(color = "#34495e", size = base_size),
+      axis.text    = element_text(color = "#7f8c8d", size = base_size - 1),
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      plot.margin  = margin(15, 15, 15, 15)
+    )
+}
+# Standard PNG dimensions
+OV_W <- 1000; OV_H <- 650; OV_W_SM <- 800; OV_H_SM <- 500
+
 # ---- SECTION 1: Run Statistics ---------------------------------------------
 if (isTRUE(api_skip_db)) {
   cat("Generating Run Statistics...\n")
-
   species_combined <- api_counts
   colnames(species_combined)[colnames(species_combined) == "count"] <- "total"
   species_combined$virus <- 0
@@ -768,45 +789,48 @@ if (isTRUE(api_skip_db)) {
   species_combined$non_virus <- species_combined$total - species_combined$virus
   species_combined <- species_combined[order(species_combined$total, decreasing = TRUE), ]
   species_combined$name <- factor(species_combined$name, levels = rev(species_combined$name))
-
   sp_long <- data.frame(
     species = rep(species_combined$name, 2),
     count   = c(species_combined$virus, species_combined$non_virus),
     type    = rep(c("Virus+", "Virus-"), each = nrow(species_combined)))
 
   plot.stacked <- ggplot(sp_long, aes(count, species, fill = type)) +
-    geom_bar(stat = "identity", position = "stack") + theme_bw() +
-    scale_fill_manual(values = c("Virus+" = "#CB4154", "Virus-" = "gray85")) +
-    xlab("Number of SRA Runs") + ylab("") +
-    ggtitle(sprintf("%s: SRA Runs by Species (total=%d, virus+=%d)",
-                    p$genus_match_term, sum(species_combined$total),
-                    sum(species_combined$virus))) +
-    theme(legend.position = "bottom", legend.title = element_blank())
+    geom_bar(stat = "identity", position = "stack", width = 0.7) +
+    geom_text(data = subset(sp_long, count > 0),
+              aes(label = count), position = position_stack(vjust = 0.5),
+              size = 3, color = "white", fontface = "bold") +
+    scale_fill_manual(values = ov_colors) +
+    labs(title = sprintf("%s: SRA Runs by Species", p$genus_match_term),
+         subtitle = sprintf("Total: %d | Virus+: %d (%.1f%%)",
+                            sum(species_combined$total), sum(species_combined$virus),
+                            100 * sum(species_combined$virus) / sum(species_combined$total)),
+         x = "Number of SRA Runs", y = "") +
+    theme_ov()
 
-  png(paste0(p$output.path, p$analysis_name, '_01_species_stacked.png'), width = 1000, height = 500)
+  png(paste0(p$output.path, p$analysis_name, '_01_species_stacked.png'), width = OV_W, height = OV_H)
   print(plot.stacked); invisible(dev.off())
   write.csv(species_combined, paste0(p$output.path, p$analysis_name, '_01_species_combined.csv'), row.names = FALSE)
 
 } else {
   cat("Generating Run Statistics...\n")
-
   all_runs_n <- length(unique(all.runs))
   virus_runs_n <- length(unique(virome.runs))
   cat(sprintf("  All SRA runs: %d  |  Virus-positive: %d (%.1f%%)\n",
               all_runs_n, virus_runs_n,
               if (all_runs_n > 0) 100 * virus_runs_n / all_runs_n else 0))
-
   run_summary <- data.frame(
     Category = c("All SRA Runs", "Virus-Positive Runs"),
     Count    = c(all_runs_n, virus_runs_n))
   run_summary$Category <- factor(run_summary$Category,
                                  levels = c("All SRA Runs", "Virus-Positive Runs"))
   plot.run.summary <- ggplot(run_summary, aes(Category, Count, fill = Category)) +
-    geom_bar(stat = 'identity') + theme_bw() + theme(legend.position = "none") +
-    scale_fill_manual(values = c('gray60', 'cornflowerblue')) +
-    xlab("") + ylab("Number of SRA Runs") +
-    ggtitle(sprintf("%s: SRA Run Overview", p$analysis_name))
-  png(paste0(p$output.path, p$analysis_name, '_01_run_summary.png'), width = 600, height = 500)
+    geom_bar(stat = 'identity', width = 0.5) +
+    geom_text(aes(label = Count), vjust = -0.5, size = 4.5, fontface = "bold") +
+    scale_fill_manual(values = c("All SRA Runs" = "#2c3e50", "Virus-Positive Runs" = "#e74c3c")) +
+    labs(title = sprintf("%s: SRA Run Overview", p$analysis_name),
+         x = "", y = "Number of Runs") +
+    theme_ov() + theme(legend.position = "none")
+  png(paste0(p$output.path, p$analysis_name, '_01_run_summary.png'), width = OV_W_SM, height = OV_H_SM)
   print(plot.run.summary); invisible(dev.off())
 
   vorgx.df <- virome.df2 %>%
@@ -815,20 +839,15 @@ if (isTRUE(api_skip_db)) {
   colnames(vorgx.df) <- c('scientific_name', 'tax_family', 'vRNA', 'n')
   vorgx.df$scientific_name <- factor(vorgx.df$scientific_name,
     levels = rev(levels(virome.df2$scientific_name)))
-  vorgx.df$tax_family <- factor(vorgx.df$tax_family,
-    levels = levels(virome.df2$tax_family))
+  vorgx.df$tax_family <- factor(vorgx.df$tax_family, levels = levels(virome.df2$tax_family))
   plot.virome.org <- ggplot(vorgx.df, aes(scientific_name, n, fill = vRNA)) +
-    geom_bar(stat = 'identity') + coord_flip() + theme_bw() +
-    xlab("Scientific Name") + ylab("Virus-positive SRA Runs (count)") +
-    facet_wrap(~vRNA) + scale_fill_manual(values = p$ui.setcol)
-  png(paste0(p$output.path, p$analysis_name, '_01_run_barplot.png'), width = 1000, height = 450)
+    geom_bar(stat = 'identity', width = 0.7) + coord_flip() +
+    geom_text(aes(label = n), hjust = -0.2, size = 3) +
+    facet_wrap(~vRNA) + scale_fill_manual(values = ov_colors) +
+    labs(title = "Virus-Positive Runs by Species", x = "", y = "Runs (count)") +
+    theme_ov()
+  png(paste0(p$output.path, p$analysis_name, '_01_run_barplot.png'), width = OV_W, height = OV_H)
   print(plotly::hide_legend(plot.virome.org)); invisible(dev.off())
-
-  # SRA Data Type + BioProject plots (DB only)
-  if (exists("sra.df") && is.data.frame(sra.df)) {
-    # ... SRA data type polar plots omitted for brevity in this rewrite
-    # ... BioProject analysis omitted
-  }
 }
 
 # ---- SECTION 2: Virus Family Summary ---------------------------------------
@@ -837,22 +856,22 @@ cat("Generating Virus Family Summary...\n")
 virFam.nrun <- virome.df[, c('tax_family', 'run')]
 virFam.nrun$tax_family <- makeTop10(virFam.nrun$tax_family, top.n = 20)
 virFam.nrun <- unique(virFam.nrun[, c('tax_family', 'run')]) %>% count(tax_family)
-virFam.nrun$set <- 'n_runs'
-
+virFam.nrun$set <- 'Runs'
 virFam.sotu <- virome.df[, c('tax_family', 'sotu')]
 virFam.sotu$tax_family <- makeTop10(virFam.sotu$tax_family, top.n = 20)
 virFam.sotu <- unique(virFam.sotu[, c('tax_family', 'sotu')]) %>% count(tax_family)
-virFam.sotu$set <- 'n_sotu'
+virFam.sotu$set <- 'sOTUs'
+virFam.df <- rbind(virFam.nrun, virFam.sotu); rm(virFam.nrun, virFam.sotu)
 
-virFam.df <- rbind(virFam.nrun, virFam.sotu)
-rm(virFam.nrun, virFam.sotu)
+plot.virFam.n <- ggplot(virFam.df, aes(tax_family, n, fill = set)) +
+  geom_bar(stat = 'identity', position = "dodge", width = 0.7) +
+  geom_text(aes(label = n), position = position_dodge(0.7), hjust = -0.2, size = 3) +
+  coord_flip() + scale_x_discrete(limits = rev) +
+  scale_fill_manual(values = c("Runs" = "#3498db", "sOTUs" = "#e67e22")) +
+  labs(title = "Virus Family Distribution", subtitle = "Top 20 families by SRA runs and unique sOTUs",
+       x = "Taxonomic Family", y = "Count") + theme_ov()
 
-plot.virFam.n <- ggplot(virFam.df, aes(tax_family, n)) +
-  geom_bar(stat = 'identity') + coord_flip() + scale_x_discrete(limits = rev) +
-  theme_bw() + theme(legend.position = "none") +
-  xlab("Taxonomic Family") + ylab("Count") + facet_wrap(~set)
-
-png(paste0(p$output.path, p$analysis_name, '_02_family_counts.png'), width = 800, height = 400)
+png(paste0(p$output.path, p$analysis_name, '_02_family_counts.png'), width = OV_W, height = OV_H)
 print(plot.virFam.n); invisible(dev.off())
 
 virFam.nrun2 <- unique(virome.df[, c('tax_family', 'run')]) %>% count(tax_family)
@@ -862,14 +881,16 @@ colnames(virFam.sotu2) <- c("tax_family", "n_sotu")
 virFam.df2 <- merge(virFam.nrun2, virFam.sotu2, by = "tax_family")
 rm(virFam.nrun2, virFam.sotu2)
 
-plot.virFam.xy <- ggplot(virFam.df2, aes(n_run, n_sotu, color = tax_family)) +
-  geom_point() + theme_bw() + theme(legend.position = "none") +
-  xlab("Count (Runs)") + ylab("Count (sOTU)")
+plot.virFam.xy <- ggplot(virFam.df2, aes(n_run, n_sotu)) +
+  geom_point(aes(color = n_run), size = 4, alpha = 0.8) +
+  scale_color_viridis(option = "D") +
+  labs(title = "Runs vs sOTUs per Family", x = "Runs", y = "sOTUs") +
+  theme_ov() + theme(legend.position = "none")
 
-png(paste0(p$output.path, p$analysis_name, '_02_family_scatter.png'), width = 1000, height = 800)
+png(paste0(p$output.path, p$analysis_name, '_02_family_scatter.png'), width = OV_W_SM, height = OV_H_SM)
 print(plotly::hide_legend(plot.virFam.xy)); invisible(dev.off())
 
-# Family vs BioProject Heatmap (if sra.df available)
+# Family vs BioProject Heatmap
 if (exists("sra.df") && is.data.frame(sra.df)) {
   bp.total.n2 <- sra.df %>% count(bioproject, sort = TRUE)
   virFam.bp <- virome.df[, c('tax_family', 'bio_project')]
@@ -878,42 +899,36 @@ if (exists("sra.df") && is.data.frame(sra.df)) {
   bpTop   <- colnames(virFam.bp)
   bpTop.n <- as.numeric(bp.total.n2$n[match(bpTop, bp.total.n2$bioproject, nomatch = NA)])
   bpTop.n <- bpTop.n[!is.na(bpTop.n)]
-  virFam.bp <- t(t(virFam.bp) / bpTop.n)
-  virFam.bp <- round(100 * virFam.bp, 2)
-  virFam.bp <- as.matrix(virFam.bp)
+  virFam.bp <- t(t(virFam.bp) / bpTop.n); virFam.bp <- round(100 * virFam.bp, 2); virFam.bp <- as.matrix(virFam.bp)
   rm(bpTop, bpTop.n, bp.total.n2)
-
   if (length(virFam.bp[1, ]) > 1) {
-    png(paste0(p$output.path, p$analysis_name, '_02_family_heatmap.png'), width = 1000, height = 600)
+    png(paste0(p$output.path, p$analysis_name, '_02_family_heatmap.png'), width = OV_W, height = 600)
     gplots::heatmap.2(virFam.bp, trace = "none",
       breaks = c(0, 1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100),
       density.info = "none", col = c("black", viridis::viridis(10, option = "A")),
-      key.title = "", key.xlab = "Percent BioProject Virus+",
-      margins = c(10, 10), sepcolor = NULL)
+      key.title = "", key.xlab = "% BioProject Virus+", margins = c(10, 10), sepcolor = NULL)
     invisible(dev.off())
   }
 }
 
 # Per-species tax family polar distribution
-vorgx.df2 <- virome.df2[virome.df2$node_qc, ] %>%
-  count(scientific_name, tax_family, sort = TRUE)
+vorgx.df2 <- virome.df2[virome.df2$node_qc, ] %>% count(scientific_name, tax_family, sort = TRUE)
 vorgx.df2$scientific_name <- factor(vorgx.df2$scientific_name,
   levels = rev(levels(virome.df2$scientific_name)))
-vorgx.df2$tax_family <- factor(vorgx.df2$tax_family,
-  levels = levels(virome.df2$tax_family))
+vorgx.df2$tax_family <- factor(vorgx.df2$tax_family, levels = levels(virome.df2$tax_family))
 vorgx.df2 <- vorgx.df2[!is.na(vorgx.df2$scientific_name), ]
-
 virome2.org <- ggplot(vorgx.df2, aes(x = tax_family, n, fill = tax_family)) +
-  geom_bar(stat = 'identity') + scale_y_log10() + coord_polar("x", start = 0) +
-  theme_bw() + theme(aspect.ratio = 1, legend.position = "none") +
+  geom_bar(stat = 'identity') + coord_polar("x", start = 0) +
+  scale_fill_viridis(discrete = TRUE, option = "D") +
+  labs(title = "Taxonomic Distribution per Species") +
+  theme_ov() + theme(aspect.ratio = 1, legend.position = "none") +
   facet_wrap(~scientific_name, ncol = 4)
 
-png(paste0(p$output.path, p$analysis_name, '_02_label_summary.png'), width = 1000, height = 800)
+png(paste0(p$output.path, p$analysis_name, '_02_label_summary.png'), width = OV_W, height = OV_H)
 print(virome2.org); invisible(dev.off())
 
 # ---- SECTION 3: sOTU Expression & Frequency --------------------------------
 cat("Generating sOTU Summary...\n")
-
 ranklvl  <- c("phylum", "family", "genus", "species")
 virx.df$gb_match <- ranklvl[1]
 virx.df$gb_match[which(virx.df$gb_pid >= 45)] <- ranklvl[2]
@@ -922,32 +937,40 @@ virx.df$gb_match[which(virx.df$gb_pid >= 90)] <- ranklvl[4]
 virx.df$gb_match <- factor(virx.df$gb_match, levels = ranklvl)
 virx.df$plot_name <- makeTop10(virx.df$tax_family)
 
-virus.exp2 <- ggplot() +
-  geom_point(data = virx.df, aes(x = n, y = gb_pid,
-      size = log(mean_coverage + 1), color = log(mean_coverage + 1)),
-    show.legend = FALSE, alpha = 0.5) +
-  geom_hline(yintercept = 90, color = "gray70", linetype = "dashed") +
-  theme_bw() + scale_color_viridis(option = "plasma") +
+virus.exp2 <- ggplot(virx.df, aes(x = n, y = gb_pid)) +
+  geom_point(aes(size = log(mean_coverage + 1), color = log(mean_coverage + 1)),
+             alpha = 0.6) +
+  geom_hline(yintercept = 90, color = "#e74c3c", linetype = "dashed", linewidth = 0.5) +
+  scale_color_viridis(option = "plasma") +
   scale_x_log10() + scale_y_log10() + scale_size_identity() +
-  xlab("sOTU frequency in SRA Runs") + ylab("GenBank Identity (%)") +
-  facet_wrap(~plot_name, ncol = 4)
+  labs(title = "sOTU Expression Landscape",
+       subtitle = "Frequency in SRA vs GenBank identity. Dashed line = 90% species threshold.",
+       x = "sOTU Frequency", y = "GenBank Identity (%)") +
+  theme_ov() + facet_wrap(~plot_name, ncol = 4)
 
-png(paste0(p$output.path, p$analysis_name, '_03_sotu_expression.png'), width = 1200, height = 800)
+png(paste0(p$output.path, p$analysis_name, '_03_sotu_expression.png'), width = OV_W, height = OV_H)
 print(plotly::hide_legend(virus.exp2)); invisible(dev.off())
 
+# Three histograms — use grid.arrange to avoid overwrite bug (Bizard fix)
 virx.df$tax_family2 <- makeTop10(virx.df$tax_family)
-virus.hist.n <- ggplot(virx.df, aes(n, fill = tax_family2)) +
-  geom_histogram(bins = 30) + scale_x_log10() + theme_bw() +
-  ggtitle("sOTU Frequency in SRA")
-virus.hist.cov <- ggplot(virx.df, aes(mean_coverage, fill = tax_family2)) +
-  geom_histogram(bins = 30) + scale_x_log10() + theme_bw() +
-  ggtitle("sOTU Mean Coverage")
-virus.hist.gbid <- ggplot(virx.df, aes(gb_pid, fill = tax_family2)) +
-  geom_histogram(bins = 30) + scale_x_log10() + theme_bw() +
-  ggtitle("GenBank Identity Distribution")
+virx.df$n_log <- log10(pmax(virx.df$n, 1))
+virx.df$cov_log <- log10(pmax(virx.df$mean_coverage, 1))
+p1 <- ggplot(virx.df, aes(n_log, fill = tax_family2)) +
+  geom_histogram(bins = 30, alpha = 0.8) +
+  scale_fill_viridis(discrete = TRUE, option = "D") +
+  labs(title = "sOTU Frequency", x = "log10(Frequency)", y = "") + theme_ov()
+p2 <- ggplot(virx.df, aes(cov_log, fill = tax_family2)) +
+  geom_histogram(bins = 30, alpha = 0.8) +
+  scale_fill_viridis(discrete = TRUE, option = "D") +
+  labs(title = "Mean Coverage", x = "log10(Coverage)", y = "") + theme_ov()
+p3 <- ggplot(virx.df, aes(gb_pid, fill = tax_family2)) +
+  geom_histogram(bins = 30, alpha = 0.8) +
+  scale_fill_viridis(discrete = TRUE, option = "D") +
+  labs(title = "GenBank Identity", x = "% Identity", y = "") + theme_ov()
 
-png(paste0(p$output.path, p$analysis_name, '_03_histograms.png'), width = 1000, height = 1000)
-print(virus.hist.n); print(virus.hist.cov); print(virus.hist.gbid); invisible(dev.off())
+png(paste0(p$output.path, p$analysis_name, '_03_histograms.png'), width = OV_W, height = 1000)
+gridExtra::grid.arrange(p1, p2, p3, ncol = 1)
+invisible(dev.off())
 
 # ---- SECTION 4: Geographical Distribution ----------------------------------
 cat("Generating Geographical Map...\n")
@@ -1048,17 +1071,23 @@ V(vir.g)$pr <- degree(vir.g, normalized = TRUE)
 V(vir.g)$vrich <- 0
 V(vir.g)$vrank <- V(vir.g)$pr
 
-# Network plot
+# Bipartite network plot — improved igraph styling
 if (length(V(vir.g)) < 2000 & length(E(vir.g)) < 5000) {
-  png(paste0(p$output.path, p$analysis_name, '_05_virome_network.png'), width = 1200, height = 1200)
-  plot.igraph(vir.g, layout = layout_nicely, vertex.size = 5,
-    vertex.label = NA, vertex.color = V(vir.g)$type, arrow.mode = "-", rescale = TRUE)
+  png(paste0(p$output.path, p$analysis_name, '_05_virome_network.png'), width = OV_W, height = OV_W)
+  set.seed(42)
+  plot.igraph(vir.g, layout = layout_with_fr(vir.g),
+    vertex.size = ifelse(V(vir.g)$type, 6, 3),
+    vertex.label = NA,
+    vertex.color = ifelse(V(vir.g)$type, "#e74c3c", "#3498db"),
+    vertex.frame.color = NA,
+    edge.color = "#ecf0f1", edge.width = 0.5,
+    arrow.mode = "-", main = "Bipartite Run-sOTU Network")
+  legend("topright", legend = c("sOTU", "SRA Run"), col = c("#e74c3c", "#3498db"),
+         pch = 19, pt.cex = 1.5, bty = "n")
   invisible(dev.off())
-} else {
-  cat("  Skipping network plot (>2000 nodes or >5000 edges)\n")
 }
 
-# Component stats
+# Component stats (Bizard-style 2x2 grid with unified theme)
 component.stats <- function(g) {
   cs <- data.frame(component = "nil", n_sotu = 0, n_run = 0, n_edge = 0,
     D_sotu = 0, D_run = 0, Vrich = 0, Dia = 0)
@@ -1077,56 +1106,40 @@ component.stats <- function(g) {
     cs <- rbind(cs, cs.i)
   }
   cs <- cs[-1, ]; cs <- cs[order(as.numeric(as.character(cs$component))), ]
-  cs$component <- factor(cs$component)
-  return(cs)
+  cs$component <- factor(cs$component); return(cs)
 }
-
 cs.df <- component.stats(vir.g); rm(component.stats)
 cs.df$n_nodes <- cs.df$n_sotu + cs.df$n_run
-cs.df$perc_sotu <- 100 * cs.df$n_sotu / cs.df$n_nodes
-
 netlim  <- c(1, max(with(cs.df, c(n_nodes, n_edge))))
 nodelim <- c(0, max(with(cs.df, c(n_sotu, n_run))))
 dlim    <- range(with(cs.df, c(D_sotu, D_run)))
 
-plot.comp1 <- ggplot(cs.df, aes(n_nodes, n_edge, label = component, fill = component)) +
-  geom_abline(slope = 1, intercept = 0, color = 'gray50') +
-  geom_text(colour = "black", fontface = "plain", check_overlap = TRUE) +
-  theme_bw() + theme(legend.position = "none") + scale_x_log10() + scale_y_log10() +
-  scale_fill_manual(values = turbo(length(cs.df$component))) +
+p1 <- ggplot(cs.df, aes(n_nodes, n_edge, color = n_sotu, size = n_edge)) +
+  geom_point(alpha = 0.85) + geom_abline(slope = 1, intercept = 0, color = "gray70", lty = 2) +
+  scale_x_log10() + scale_y_log10() + scale_color_viridis(option = "D") +
   coord_cartesian(xlim = netlim, ylim = netlim) +
-  xlab('Number of Nodes') + ylab('Number of Edges')
-
-plot.comp2 <- ggplot(cs.df, aes(n_run, n_sotu, label = component, size = log10(n_edge), fill = component)) +
-  geom_abline(slope = 1, intercept = 0, color = 'gray50') +
-  geom_text(colour = "black", fontface = "plain", check_overlap = TRUE) +
-  theme_bw() + theme(legend.position = "none") +
-  scale_fill_manual(values = turbo(length(cs.df$component))) +
+  labs(title = "Nodes vs Edges", x = "Nodes", y = "Edges") + theme_ov()
+p2 <- ggplot(cs.df, aes(n_run, n_sotu, color = n_edge, size = n_edge)) +
+  geom_point(alpha = 0.85) + geom_abline(slope = 1, intercept = 0, color = "gray70", lty = 2) +
+  scale_color_viridis(option = "B") +
   coord_cartesian(xlim = nodelim, ylim = nodelim) +
-  xlab('Number of Runs (nodes)') + ylab('Number of sOTU (nodes)')
-
-plot.comp3 <- ggplot(cs.df, aes(n_sotu, Vrich, label = component, size = log10(n_edge), fill = component)) +
-  geom_abline(slope = 1, intercept = 0, color = 'gray50') +
-  geom_text(colour = "black", fontface = "plain", check_overlap = TRUE) +
-  theme_bw() + theme(legend.position = "none") +
-  scale_fill_manual(values = turbo(length(cs.df$component))) +
+  labs(title = "Runs vs sOTUs", x = "Runs", y = "sOTUs") + theme_ov()
+p3 <- ggplot(cs.df, aes(n_sotu, Vrich, color = n_edge, size = n_edge)) +
+  geom_point(alpha = 0.85) + scale_color_viridis(option = "C") +
   coord_cartesian(xlim = nodelim, ylim = nodelim) +
-  xlab('Number of sOTU (nodes)') + ylab('Cumulative Virome Enrichment')
-
-plot.comp4 <- ggplot(cs.df, aes(D_sotu, D_run, label = component, size = log10(n_edge), fill = component)) +
-  geom_abline(slope = 1, intercept = 0, color = 'gray50') +
-  geom_text(colour = "black", fontface = "plain", check_overlap = TRUE) +
-  theme_bw() + theme(legend.position = "none") +
-  scale_fill_manual(values = turbo(length(cs.df$component))) +
+  labs(title = "sOTUs vs Enrichment", x = "sOTUs", y = "V. Enrichment") + theme_ov()
+p4 <- ggplot(cs.df, aes(D_sotu, D_run, color = n_edge, size = n_edge)) +
+  geom_point(alpha = 0.85) + geom_abline(slope = 1, intercept = 0, color = "gray70", lty = 2) +
+  scale_color_viridis(option = "A") +
   coord_cartesian(xlim = dlim, ylim = dlim) +
-  xlab('Mean Runs per sOTU (Degree)') + ylab('Mean sOTU per Run (Degree)')
+  labs(title = "Degree: sOTU vs Run", x = "Mean deg/sOTU", y = "Mean deg/Run") + theme_ov()
 rm(netlim, nodelim, dlim)
 
-png(paste0(p$output.path, p$analysis_name, '_05_component_stats.png'), width = 1200, height = 1000)
-print(plot.comp1); print(plot.comp2); print(plot.comp3); print(plot.comp4)
+png(paste0(p$output.path, p$analysis_name, '_05_component_stats.png'), width = OV_W, height = 900)
+gridExtra::grid.arrange(p1, p2, p3, p4, ncol = 2)
 invisible(dev.off())
 
-# sOTU Ranking plot
+# sOTU Ranking — Lollipop chart (Bizard-style, replaces overcrowded scatter)
 i.sotu <- V(vir.g)$type
 vrank.df <- data.frame(
   sotu   = V(vir.g)$name[i.sotu],
@@ -1136,12 +1149,19 @@ vrank.df <- data.frame(
   nruns  = degree(vir.g)[i.sotu])
 rm(i.sotu)
 vrank.df <- vrank.df[order(vrank.df$vrank, decreasing = TRUE), ]
+top_sotus <- head(vrank.df, 20)
+top_sotus$sotu_label <- factor(top_sotus$sotu, levels = rev(top_sotus$sotu))
 
-plot.vrank <- ggplot(vrank.df, aes(pr, vrich, fill = vrank, label = sotu)) +
-  geom_text(colour = "black", fontface = "plain", check_overlap = TRUE) +
-  viridis::scale_fill_viridis(option = "plasma") + theme_bw() +
-  xlab('Page Rank (sOTU)') + ylab('V-enrichment (sOTU)')
-png(paste0(p$output.path, p$analysis_name, '_05_sotu_vrank.png'), width = 1000, height = 800)
+plot.vrank <- ggplot(top_sotus, aes(vrank, sotu_label)) +
+  geom_segment(aes(xend = 0, yend = sotu_label), color = "#bdc3c7", linewidth = 1) +
+  geom_point(aes(size = nruns, color = vrank), alpha = 0.9) +
+  scale_color_viridis(option = "plasma") +
+  scale_size_continuous(range = c(2, 8)) +
+  labs(title = "Top 20 sOTUs by Virome Rank",
+       subtitle = "vrank = PageRank × V-enrichment. Size = number of runs.",
+       x = "Virome Rank", y = "") + theme_ov()
+
+png(paste0(p$output.path, p$analysis_name, '_05_sotu_vrank.png'), width = OV_W_SM, height = OV_H_SM)
 print(plot.vrank); invisible(dev.off())
 
 # Palmprint Network (DB only)
