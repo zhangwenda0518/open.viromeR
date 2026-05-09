@@ -1207,11 +1207,15 @@ dt_summary <- cbind(
     rownames = FALSE, filter = "top", escape = FALSE,
     options = list(ordering = TRUE, order = list(list(2, 'desc')), pageLength = 20, scrollX = TRUE))
 
-# Save DT widgets as standalone HTML AND embeddable divs for the main report
+# Save standalone interactive tables AND CSV
 htmlwidgets::saveWidget(dt_full,
   paste0(p$output.path, p$analysis_name, '_06_full_table.html'), selfcontained = TRUE)
 htmlwidgets::saveWidget(dt_summary,
   paste0(p$output.path, p$analysis_name, '_06_summary_table.html'), selfcontained = TRUE)
+
+# Export raw CSV tables for reproducibility
+write.csv(virome.df, paste0(p$output.path, p$analysis_name, '_virome_raw.csv'), row.names = FALSE)
+write.csv(virx.df,   paste0(p$output.path, p$analysis_name, '_virome_summary_raw.csv'), row.names = FALSE)
 
 # Generate embeddable HTML snippets for the main report
 dt_full_html  <- paste(capture.output(print(dt_full)), collapse = "\n")
