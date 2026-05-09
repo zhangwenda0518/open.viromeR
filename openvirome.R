@@ -678,31 +678,20 @@ if ("taxid" %in% colnames(virome.df)) {
 }
 
 # Melt virome data.frame, group by sOTU
-if (isTRUE(api_skip_db) || !requireNamespace("open.viromeR", quietly = TRUE)) {
-  # Local implementation for API mode
-  if ("sotu" %in% colnames(virome.df) && "sotu" != "unknown") {
-    virx.df <- dplyr::count(virome.df, sotu, sort = TRUE)
-    meta_cols <- intersect(c("sotu", "nickname", "gb_acc", "gb_pid", "gb_eval", "tax_species", "tax_family"),
-                           colnames(virome.df))
-    meta <- virome.df[!duplicated(virome.df$sotu), meta_cols]
-    virx.df <- merge(virx.df, meta, by = "sotu")
-    if ("node_coverage" %in% colnames(virome.df)) {
-      virx.df$mean_coverage <- sapply(virx.df$sotu, function(s) {
-        mean(virome.df$node_coverage[virome.df$sotu == s], na.rm = TRUE)
-      })
-    } else {
-      virx.df$mean_coverage <- 0
-      virx.df$gb_pid <- if ("gb_pid" %in% colnames(virx.df)) as.numeric(virx.df$gb_pid) else 0
-      virx.df$max_coverage <- 0
-    }
-    virx.df$max_coverage <- 0
-  } else {
-    # Fallback: create minimal virx.df from species counts
-    virx.df <- data.frame(sotu = "no_palmprint_data", n = nrow(virome.df),
-      nickname = "", gb_acc = "", gb_pid = 0, gb_eval = 0,
-      tax_species = "", tax_family = "", mean_coverage = 0, max_coverage = 0,
-      stringsAsFactors = FALSE)
-  }
+if (isTRUE(api_skip_db)) {
+  # API mode: local melt (no open.viromeR dependency)
+  virx.df <- dplyr::count(virome.df, sotu, sort = TRUE)
+  meta_keys <- c("sotu", "nickname", "gb_acc", "gb_pid", "gb_eval", "tax_species", "tax_family")
+  meta_keys <- intersect(meta_keys, colnames(virome.df))
+  meta <- virome.df[!duplicated(virome.df$sotu), meta_keys, drop = FALSE]
+  virx.df <- merge(virx.df, meta, by = "sotu", all.x = TRUE)
+  # Ensure numeric columns
+  if ("gb_pid" %in% colnames(virx.df)) virx.df$gb_pid <- as.numeric(virx.df$gb_pid)
+  virx.df$gb_pid[is.na(virx.df$gb_pid)] <- 0
+  virx.df$mean_coverage <- 1  # placeholder to avoid log(0)
+  virx.df$max_coverage  <- 1
+  if (!("tax_species" %in% colnames(virx.df))) virx.df$tax_species <- ""
+  if (!("tax_family" %in% colnames(virx.df))) virx.df$tax_family <- ""
 } else {
   virx.df <- melt.virome(virome.df)
 }
