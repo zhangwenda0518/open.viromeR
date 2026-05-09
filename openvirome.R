@@ -436,6 +436,8 @@ api_skip_db <- FALSE
 
 if (p$api_mode && p$search_type == "GENUS") {
   # ---- API MODE: iterate over species for correct ov_identifiers matching ----
+  # Auto-set genus_filter to genus_match_term to exclude non-target genera
+  if (p$genus_filter == '') p$genus_filter <- p$genus_match_term
   # KEY FINDING: ov_identifiers.organism stores FULL species names (e.g.
   # "Lycium barbarum"), NOT genus-level "Lycium". We must iterate over each
   # species returned by /counts to get identifiers for each one.
@@ -497,6 +499,13 @@ if (p$api_mode && p$search_type == "GENUS") {
   for (i in seq_len(nrow(api_counts))) {
     sp <- api_counts$name[i]
     n_all <- as.integer(api_counts$count[i])
+
+    # Genus filter: skip species that don't start with the target genus
+    # (e.g. Gymnocalycium, Aethionema — picked up by LIKE search)
+    if (p$genus_filter != '') {
+      if (!grepl(paste0('^', p$genus_filter), sp, ignore.case = TRUE)) next
+    }
+
     species_all[sp] <- n_all
 
     # Virus identifiers (one call per species)
@@ -555,7 +564,7 @@ if (p$api_mode && p$search_type == "GENUS") {
   }
   virome.df$node_qc <- as.logical(virome.df$node_qc)
 
-  # Species breakdown
+  # Species breakdown (API mode — one concise table)
   cat("\n  Species breakdown:\n")
   cat(sprintf("  %-45s %6s %6s %6s\n", "Species", "Total", "Virus+", "Virus-"))
   for (i in seq_len(nrow(api_counts))) {
@@ -564,8 +573,6 @@ if (p$api_mode && p$search_type == "GENUS") {
     n_vir <- if (!is.na(virus_idx)) api_vir_counts$count[virus_idx] else 0
     cat(sprintf("  %-45s %6d %6d %6d\n", sp, n_all, n_vir, n_all - n_vir))
   }
-  cat(sprintf("\n  Total SRA runs (all):     %d\n", sum(api_counts$count)))
-  cat(sprintf("  Runs with palmprint hits: %d\n", length(virome.runs)))
   api_skip_db <- TRUE
 
 } else if (p$search_type == "SEARCH") {
@@ -618,26 +625,27 @@ if (p$api_mode && p$search_type == "GENUS") {
 }
 virome.runs <- virome.df$run
 
-cat(sprintf("  Total SRA runs matching query:    %d\n", length(all.runs)))
-cat(sprintf("  Runs with palmprint (virus) hits: %d\n", length(unique(virome.df$run))))
+cat(sprintf("  Total runs: %d | Virus-positive: %d\n",
+            length(unique(all.runs)), length(unique(virome.df$run))))
 
-# ---- Species-Level Summary -------------------------------------------------
-if (!exists("api_counts") || is.null(api_counts)) {
-  sp_all <- table(as.character(virome.df$scientific_name))
-  api_counts <- data.frame(name = names(sp_all), count = as.integer(sp_all), stringsAsFactors = FALSE)
-  api_vir_counts <- api_counts
+# ---- Species-Level Summary (non-API mode only) -----------------------------
+if (!isTRUE(api_skip_db)) {
+  if (!exists("api_counts") || is.null(api_counts)) {
+    sp_all <- table(as.character(virome.df$scientific_name))
+    api_counts <- data.frame(name = names(sp_all), count = as.integer(sp_all), stringsAsFactors = FALSE)
+    api_vir_counts <- api_counts
+  }
+  cat("\n  Species breakdown:\n")
+  cat(sprintf("  %-45s %6s %6s %6s\n", "Species", "Total", "Virus+", "Virus-"))
+  cat(sprintf("  %-45s %6s %6s %6s\n", "-------", "-----", "------", "------"))
+  for (i in seq_len(nrow(api_counts))) {
+    sp <- api_counts$name[i]; n_all <- api_counts$count[i]
+    virus_idx <- match(sp, api_vir_counts$name)
+    n_vir <- if (!is.na(virus_idx)) api_vir_counts$count[virus_idx] else 0
+    cat(sprintf("  %-45s %6d %6d %6d\n", sp, n_all, n_vir, n_all - n_vir))
+  }
+  cat("\n")
 }
-
-cat("\n  Species breakdown:\n")
-cat(sprintf("  %-45s %6s %6s %6s\n", "Species", "Total", "Virus+", "Virus-"))
-cat(sprintf("  %-45s %6s %6s %6s\n", "-------", "-----", "------", "------"))
-for (i in seq_len(nrow(api_counts))) {
-  sp <- api_counts$name[i]; n_all <- api_counts$count[i]
-  virus_idx <- match(sp, api_vir_counts$name)
-  n_vir <- if (!is.na(virus_idx)) api_vir_counts$count[virus_idx] else 0
-  cat(sprintf("  %-45s %6d %6d %6d\n", sp, n_all, n_vir, n_all - n_vir))
-}
-cat("\n")
 
 # ---- Post-hoc Scientific Name Filtering ----------------------------------
 if (p$search_type == "SEARCH" && p$genus_filter == '') {
@@ -669,7 +677,7 @@ if (p$species_filter != '') {
   virome.runs <- virome.df$run
 }
 if (nrow(virome.df) == 0) stop("All records removed. Relax your filters.")
-cat(sprintf("  After filtering: %d rows retained (removed %d)\n",
+cat(sprintf("  Filtered: %d rows (%d removed)\n",
             nrow(virome.df), n_before - nrow(virome.df)))
 
 # Standard cleaning
@@ -696,7 +704,7 @@ if (isTRUE(api_skip_db)) {
   virx.df <- melt.virome(virome.df)
 }
 
-cat(sprintf("  Virus-positive runs: %d, unique sOTUs: %d\n",
+cat(sprintf("  Virus runs: %d | sOTUs: %d\n",
             length(unique(virome.runs)), nrow(virx.df)))
 
 # ---- Control Virome --------------------------------------------------------
@@ -722,8 +730,8 @@ if (p$doControl) {
     stop('Unknown control_type. Use: NONE, LIST, SEARCH, or BIOPROJECT')
   }
 }
-
-cat(sprintf("  Control set: %s\n", if (p$doControl) "active" else "none"))
+  if (!isTRUE(api_skip_db) && p$doControl)
+    cat(sprintf("  Control set: active (%s)\n", p$control_type))
 
 # ---- Merge Viromes ---------------------------------------------------------
 if (p$doControl) {
